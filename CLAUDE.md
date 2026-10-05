@@ -37,5 +37,11 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
   running `ingest-gdelt` concurrently over disjoint `--start/--end` ranges (same BigQuery cost).
 - **First import of the heavy stack is slow** (~4 min after a fresh install, vectorbt ~16–40 s
   after). `lint-imports` needs `PYTHONUTF8=1` on this console.
+- **After a change to the store's tables, run `init-db` first.** Migrations (e.g. the
+  `assets.screen_group` column) live in `SqliteStore.init()`; `load-universe` and the other
+  commands do not call it and fail with "no column named ...".
+- **Never run a trial-logging command (`signal-study`, `screen`, `backtest`) while code on `dev`
+  is being edited.** Trials are append-only; run from a frozen checkout (`git worktree add
+  --detach`) with `PYTHONPATH=<checkout>/src` if edits are in flight.
 - **GKG themes for the full dev range cost ~1 TB** — more than one month's free tier. Pull them in
   a later billing month (see experiment 0001's plan).
