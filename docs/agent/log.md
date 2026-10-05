@@ -184,3 +184,27 @@ Fixer pass on two minor conformance findings. Nothing committed, no trial logged
   `KEPT_CASES`.
 - Verified: `pytest -q` 861 passed, 8 deselected; `lint-imports` 6 contracts kept; ruff clean on
   the changed files.
+
+## 2026-10-05 (night) — resume point, autonomous run
+
+The user is away and asked me to continue autonomously as the researcher, documenting as I go.
+
+**Done, in order:** v2 committed (`394a717`, 861 tests, 6 import contracts). Look-ahead review of
+the v2 code re-run separately (the workflow's reviewer had returned empty): 20 perturbation runs
+bit-identical for dates <= t, labels/controls/partial IC/placebo clean, no hold-out reads. One
+float-residue nit in `evaluate.placebo_feature` fixed (shift before cumsum) with regression test
+`test_placebo_day_t_value_leaves_no_float_residue`. Universes reloaded with v2 rules (A 63 ETFs,
+B 900 stocks: GOOG/FOX/NWS removed). ADR 0003 (sub-category screen) written BEFORE any v2 trial.
+
+**Next steps (in this order):**
+1. `build-dataset` A then B with v2 definitions (sequential; concurrent builds lock SQLite).
+2. `signal-study` A and B (v2 trials get new ids; v1's 96 stay).
+3. If a v2 signal passes gate 1: adversarial verification (static/placebo, vol clustering,
+   definitions) before gate 2.
+4. If v2 is null (or after step 3): run ADR 0003 — needs GICS sector per stock in the universe
+   adapter, quad/sanctions/violence families as sm5 features, the bootstrap joint test,
+   empirical-Bayes shrinkage, BH-FDR, discovery 2015-2019 / confirmation 2020-2025Q1.
+5. Write experiment 0004 (v2 results) and 0005 (screen) as each completes.
+
+**Rules I am holding to:** hold-out untouched; no merge of dev into main without the user; every
+evaluation logged as a trial; BigQuery budget unchanged (no new pulls needed for 0003).

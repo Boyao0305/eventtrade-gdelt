@@ -349,8 +349,9 @@ def placebo_feature(feature: pd.DataFrame) -> pd.DataFrame:
     _one_feature(df)
     v = df["value"].replace([np.inf, -np.inf], np.nan)
     g = df["ticker"]
-    s = v.fillna(0.0).groupby(g).cumsum() - v.fillna(0.0)
-    n = v.notna().astype(float).groupby(g).cumsum() - v.notna().astype(float)
+    # Shift before summing so day t's own value never enters, not even as float residue.
+    s = v.fillna(0.0).groupby(g).shift(1, fill_value=0.0).groupby(g).cumsum()
+    n = v.notna().astype(float).groupby(g).shift(1, fill_value=0.0).groupby(g).cumsum()
     df["value"] = (s / n.where(n > 0)).where(v.notna())
     return df[FEATURE_COLUMNS].sort_values(["date", "ticker"], ignore_index=True)
 

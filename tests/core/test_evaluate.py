@@ -519,6 +519,18 @@ def test_placebo_feature_is_trailing_expanding_mean():
     assert list(p.columns) == FEATURE_COLUMNS and set(p["feature"]) == {"f"}
 
 
+def test_placebo_day_t_value_leaves_no_float_residue():
+    # Look-ahead review 2026-10-05: cumsum-then-subtract leaked day t's value as ~3.5e-13 when it
+    # was 1e6. The placebo at t must be bit-identical whatever the feature is on t or later.
+    d = pd.bdate_range("2020-01-01", periods=6)
+    base = [0.1, 0.7, 0.3, 0.9, 0.2, 0.4]
+    f = pd.DataFrame({"date": d, "ticker": "A", "feature": "f", "value": base})
+    g = f.assign(value=base[:3] + [1e6, 1e6, 1e6])
+    p_f = placebo_feature(f).set_index("date")["value"]
+    p_g = placebo_feature(g).set_index("date")["value"]
+    assert (p_f.iloc[:4] == p_g.iloc[:4]).all() or p_f.iloc[:4].equals(p_g.iloc[:4])
+
+
 def test_vol_gate_dynamic_information_passes():
     f, lab, ctl = _vol_frames(300, 30, 4, lambda r, c, s, i: (i, 0.5 * i + r.normal(size=len(s))))
     res = vol_gate(f, lab, ctl, 5, expected_sign=1.0)
