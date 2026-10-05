@@ -1,0 +1,15 @@
+# secrets — never commit credentials
+secrets/
+*.json.key
+ventong-*.json
+.env
+
+# data and build artifacts
+data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+reports/**/*.png
