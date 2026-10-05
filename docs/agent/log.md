@@ -98,3 +98,28 @@ Open after this pass:
   (turnover is not available per fold without the quantile machinery).
 - A fold where no feature passes on its training dates scores nothing; on noise the model trial
   can therefore end with "no tradable weight dates" (MISSING) and is not logged.
+
+# Gate-1 signal study + verification — 2026-10-05
+
+Recorded in `docs/experiments/0003-signal-study-dev.md`. 96 signal trials logged (A 75, B 21);
+these count toward the DSR N.
+
+- Track A direction 0/42, Track B 0/21. A4 vol: 6/33 logged "pass" (massviolence and protest
+  `share_lr.60`, h=1/5/20). Five read-only verification checks show all six are artefacts: a
+  static between-ticker level (the lr transform is NaN on zero days, so it ranks tickers by
+  sparsity, and SPY/TLT/IEF/SHY share an identical US feature) compared against a raw vol-level
+  label. With ticker demeaning, a vol-surprise label or HAR controls, |t| <= 2.3. No leak was found.
+  **Nothing is eligible for gate 2.** The 6 "pass" rows stay in the append-only trials table;
+  0003 is the record that they are invalid.
+- Must fix before any further trial (each change needs an ADR amendment, since it changes the
+  test):
+  - A4 gate uses a raw vol level (`pipelines._signal_study_vol`).
+  - Gates take the sign from the observed t, not the pre-registration (`evaluate.passes_gate`,
+    `_signal_study_vol`).
+  - `lr` sparsity selection (`features.surprise`).
+  - `z` std residue gives |z| up to 1.3e7 (`features.surprise`).
+  - GKG attention divided by the number of aliases hit (`map_to_tickers` + mean).
+  - Zero-mention days are NaN.
+  - US-tied ETFs; `eaton` and `<ambiguous> inc` aliases.
+- Open: A2 untested (no theme rows). Cost leg (4x, ~0.6 turnover) needs IC 0.03-0.05 at h=1/5,
+  above the ADR prior. Decide whether that is intended.
