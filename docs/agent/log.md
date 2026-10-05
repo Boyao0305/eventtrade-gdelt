@@ -289,3 +289,21 @@ for h = 20 cells.
 - The only code change is a sentence in the `core/screen.py` module docstring that states the
   known size loss. Behaviour is unchanged. Fast suite: 1069 passed, 8 deselected.
   lint-imports: 6 contracts kept.
+
+## 2026-10-05 (late night) — resume point 2
+
+**Results so far (all on the dev period; hold-out untouched):**
+- v2 gate-1 study: 0 passes on both tracks (experiment 0004). The A4 placebo caught the static
+  country-risk effect that fooled v1.
+- ADR 0003 sub-category screen: joint test not significant on either track (A p_S 0.116 / p_M 0.260
+  over 42 cells; B 0.329 / 0.536 over 66 cells), so both stopped at step 2 (experiment 0005).
+- Trials logged: 338 (v1 96, v2 134, screen 108).
+
+**In flight:** `ingest-gdelt gkg-themes --start 2015-03-02 --end 2025-03-31 --execute` started
+2026-10-05; it stops when October's budget runs out (~362 GB left at start) and must be re-run in
+November (resumable; it skips stored months). Check with `ingest-gdelt gkg-themes ...` without
+`--execute`: "0 to pull" means complete.
+
+**Next:** implement the ADR 0004 A2 theme screen (8 cells) now, but run it only when the theme
+pull is complete for the whole dev period. Do not read theme values before that run.
+After A2, every ADR 0001 hypothesis has been tested; write the final summary experiment.
