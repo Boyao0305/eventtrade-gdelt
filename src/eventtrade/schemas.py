@@ -41,9 +41,14 @@ FEATURE_COLUMNS = ["date", "ticker", "feature", "value"]
 #   ret_intraday:  adj_close[t+1] / adj_open[t+1] - 1            (first day only)
 LABEL_COLUMNS = ["date", "ticker", "horizon", "ret_oo", "ret_overnight", "ret_intraday"]
 
-# Forward realised volatility for hypothesis A4: daily-unit RMS of close-to-close log returns
-# over t+1..t+horizon (core/labels.realized_vol_label).
+# Volatility labels for hypothesis A4 (core/labels). `value` is one of:
+#   realized_vol_label: daily-unit RMS of close-to-close log returns over t+1..t+horizon (v1).
+#   vol_surprise_label: ln(RMS over t+1..t+h / RMS over t-21..t), the ADR 0002 A4 label.
 VOL_LABEL_COLUMNS = ["date", "ticker", "horizon", "value"]
+
+# A4 controls (ADR 0002 item 4, core/labels.vol_controls), all ending at t's close: ln realised
+# vol over the last 5, 22 and 60 returns and ln expanding long-run vol (NaN until 60 returns).
+VOL_CONTROL_COLUMNS = ["date", "ticker", "ln_rv5", "ln_rv22", "ln_rv60", "ln_rv_lr"]
 
 # Cross-sectional scores (higher = more long), produced by core/models.py rules and models.
 SCORE_COLUMNS = ["date", "ticker", "score"]

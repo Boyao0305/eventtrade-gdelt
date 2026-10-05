@@ -45,16 +45,19 @@ _AMBIGUOUS = frozenset({
     # places, rivers, mountains
     "amazon", "hartford", "corning", "everest", "cincinnati", "texas", "boston", "carolina",
     "phoenix", "arrow", "old dominion", "summit",
+    # experiment 0003: "eaton" (Eaton Canyon) matched the January 2025 Eaton Fire, 12,396 docs
+    # in one week against ~100 a week before; "eaton corp(oration)" stays
+    "eaton",
     # surnames and given names (GKG can label persons as organisations)
     "ford", "lowe", "emerson", "parker", "cooper", "johnson", "morgan", "henry", "gallagher",
     "hunt", "smith", "harris", "edison", "duke", "williams", "warner", "chase", "lilly",
     "wells", "graham", "jackson", "hamilton", "taylor", "ross",
     # generic phrases and street names
     "waste management", "state street", "iron mountain",
-    # in GKG these are almost always the market, an index or a military rank, not the company
-    "nasdaq", "adm",
-    # cited as a source or authority far more often than reported on
-    "new york times", "gartner", "moody",
+    # in GKG these are almost always an index or a military rank, not the company
+    "adm",
+    # cited as a source or authority far more often than reported on (see also _CITED_ANY_FORM)
+    "new york times", "moody",
     # named incidentally (a platform, a venue, boilerplate) in most articles that list them:
     # about 1-2 of 12 sampled articles were about the company (experiment 0002)
     "google", "netflix", "hyatt",
@@ -63,6 +66,11 @@ _AMBIGUOUS = frozenset({
     # other generic matches seen in experiment 0002
     "american international", "crown corporation", "ryder",
 })
+# Cores cited as a market, source or data vendor in boilerplate that itself carries the legal
+# suffix ("source: Morningstar Inc", "Nasdaq Inc" listing notices). Ambiguous bare AND with any
+# trailing legal suffix. Experiment 0003 dev counts, mostly not about the company: morningstar inc
+# 138k, nasdaq inc 77k, gartner inc 47k docs. Extend only with measured evidence.
+_CITED_ANY_FORM = frozenset({"nasdaq", "gartner", "morningstar"})
 
 
 def make_aliases(name: str, ticker: str) -> list[str]:
@@ -89,12 +97,20 @@ def make_aliases(name: str, ticker: str) -> list[str]:
 def is_ambiguous(alias: str) -> bool:
     """True if the alias is a common word, place, person, incidental mention, or too short."""
     a = " ".join(alias.lower().split())
-    if a in _AMBIGUOUS:
+    if a in _AMBIGUOUS or _core_of(a) in _CITED_ANY_FORM:
         return True
     head, _, last = a.rpartition(" ")
     if last in _GENERIC_ON_AMBIGUOUS and head in _AMBIGUOUS:
         return True
     return " " not in a and len(a) <= 2
+
+
+def _core_of(alias: str) -> str:
+    """The alias with every trailing legal suffix removed (never down to nothing)."""
+    tokens = alias.split()
+    while len(tokens) > 1 and tokens[-1] in _LEGAL_SUFFIXES:
+        tokens.pop()
+    return " ".join(tokens)
 
 
 def _text_forms(name: str) -> list[str]:

@@ -12,6 +12,9 @@ Alignment rules (pinned by tests/core/test_labels.py):
 - Bars beyond the end of `prices` are missing, so truncating `prices` before
   `config.HOLDOUT_START` is enough to keep hold-out prices out of every label.
 - Dates come back as `datetime64[ns]` (midnight).
+- A4 (ADR 0002 item 4) uses `vol_surprise_label`, a vol *shock* (forward / trailing vol), with
+  `vol_controls` as regressors; `realized_vol_label` is the vol *level* that experiment 0003
+  showed ranks with any static per-ticker offset, kept as a diagnostic only.
 """
 
 from datetime import date
@@ -19,9 +22,32 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from eventtrade.schemas import LABEL_COLUMNS, PRICE_COLUMNS, VOL_LABEL_COLUMNS
+from eventtrade.schemas import (
+    LABEL_COLUMNS,
+    PRICE_COLUMNS,
+    VOL_CONTROL_COLUMNS,
+    VOL_LABEL_COLUMNS,
+)
 
-__all__ = ["VOL_LABEL_COLUMNS", "make_labels", "realized_vol_label"]
+__all__ = [
+    "VOL_CONTROL_COLUMNS",
+    "VOL_CONTROL_NAMES",
+    "VOL_LABEL_COLUMNS",
+    "make_labels",
+    "realized_vol_label",
+    "vol_controls",
+    "vol_surprise_label",
+]
+
+# A4 v2 (ADR 0002 item 4): trailing-vol controls, all ending at t. Columns of `vol_controls` are
+# VOL_CONTROL_COLUMNS == ["date", "ticker", *VOL_CONTROL_NAMES].
+VOL_CONTROL_NAMES = VOL_CONTROL_COLUMNS[2:]
+SURPRISE_TRAILING_DAYS = 22
+_CONTROL_WINDOWS = {"ln_rv5": 5, "ln_rv22": 22, "ln_rv60": 60}
+_LONG_RUN_MIN_RETURNS = 60
+# Mean squared daily log return treated as zero (rolling sums can leave ~1e-20 residue after a
+# run of identical closes); 1e-14 is a daily vol of 1e-7, far below any traded asset.
+_ZERO_VAR = 1e-14
 
 
 def make_labels(
@@ -69,6 +95,54 @@ def realized_vol_label(
     out["value"] = _stack(vol.shift(-h), keys)
     out["horizon"] = out["horizon"].astype("int64")
     return out[VOL_LABEL_COLUMNS].sort_values(["date", "ticker"], ignore_index=True)
+
+
+def vol_surprise_label(
+    prices: pd.DataFrame, horizon: int, trading_days: list[date] | None = None
+) -> pd.DataFrame:
+    """A4 v2 label: ln(forward realised vol over t+1..t+h / trailing 22-day realised vol to t).
+
+    Both vols are zero-mean RMS of close-to-close log returns (as `realized_vol_label`). The
+    forward leg uses r_{t+1}..r_{t+h}; the trailing leg r_{t-21}..r_t, so it needs closes
+    t-22..t. A zero vol on either side, or any missing close, gives NaN (never +/-inf).
+    """
+    (h,) = _check_horizons([horizon])
+    c, keys = _wide(prices, ["adj_close"], trading_days)
+    r2 = np.log(c / c.shift(1)) ** 2
+    fwd = _ln_rms(r2, h).shift(-h)
+    trail = _ln_rms(r2, SURPRISE_TRAILING_DAYS)
+    out = keys.copy()
+    out["horizon"] = h
+    out["value"] = _stack(fwd - trail, keys)
+    out["horizon"] = out["horizon"].astype("int64")
+    return out[VOL_LABEL_COLUMNS].sort_values(["date", "ticker"], ignore_index=True)
+
+
+def vol_controls(prices: pd.DataFrame, trading_days: list[date] | None = None) -> pd.DataFrame:
+    """Per (date, ticker): ln rv5, ln rv22, ln rv60 and ln expanding long-run vol, all ending at t.
+
+    Each is ln sqrt(mean r_s^2) of close-to-close log returns over the window ending with r_t
+    (= ln(C_t / C_{t-1})); the long-run vol uses every return up to t and needs at least 60. They
+    use t's close, after the 15:30 decision cutoff: they are a statistical baseline for the A4 gate,
+    not a trading input, and including r_t absorbs more volatility clustering (the conservative
+    choice). Zero vol or any missing close in a rolling window -> NaN; the long-run vol averages
+    the returns it has.
+    """
+    c, keys = _wide(prices, ["adj_close"], trading_days)
+    r2 = np.log(c / c.shift(1)) ** 2
+    out = keys.copy()
+    for name, w in _CONTROL_WINDOWS.items():
+        out[name] = _stack(_ln_rms(r2, w), keys)
+    lr = r2.expanding(min_periods=_LONG_RUN_MIN_RETURNS).mean()
+    out["ln_rv_lr"] = _stack(0.5 * np.log(lr.where(lr > _ZERO_VAR)), keys)
+    return out[["date", "ticker", *VOL_CONTROL_NAMES]].sort_values(["date", "ticker"],
+                                                                    ignore_index=True)
+
+
+def _ln_rms(r2: pd.DataFrame, window: int) -> pd.DataFrame:
+    """ln sqrt(mean of `window` squared returns ending at each row); NaN if incomplete or zero."""
+    m = r2.rolling(window, min_periods=window).mean()
+    return 0.5 * np.log(m.where(m > _ZERO_VAR))
 
 
 def _check_horizons(horizons: list[int]) -> list[int]:

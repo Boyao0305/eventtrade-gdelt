@@ -10,12 +10,15 @@ from pathlib import Path
 
 import pytest
 
+from eventtrade.adapters import universe as universe_mod
 from eventtrade.adapters.universe import (
+    _one_share_class,
     _parse_index_html,
     _parse_universe_csv,
     fetch_index_members,
     load_etf_universe,
 )
+from eventtrade.schemas import Asset
 
 FIX = Path(__file__).parent / "fixtures"
 FIPS = {line.split("\t")[0] for line in (FIX / "universe_fips_country.txt")
@@ -43,6 +46,25 @@ def test_country_etfs_have_one_country_and_no_themes():
     for a in load_etf_universe():
         if a.group == "country":
             assert len(a.fips_countries) == 1 and a.gkg_themes == [], a.ticker
+
+
+def test_rates_etfs_have_no_country_and_only_spy_is_plain_us():
+    # ADR 0002 item 2 / experiment 0003: SPY, TLT, IEF and SHY all mapped to ['US'] and so had
+    # identical event features. Rates are not a country-news bet: they lose the mapping.
+    by = {a.ticker: a for a in load_etf_universe()}
+    for t in ("TLT", "IEF", "SHY"):
+        assert by[t].group == "rates" and by[t].fips_countries == [], t
+    assert by["SPY"].fips_countries == ["US"]
+    assert [a.ticker for a in by.values() if a.fips_countries == ["US"]] == ["SPY"]
+
+
+def test_no_two_etfs_share_a_country_list():
+    seen: dict[tuple[str, ...], str] = {}
+    for a in load_etf_universe():
+        if a.fips_countries:
+            key = tuple(sorted(a.fips_countries))
+            assert key not in seen, (a.ticker, seen.get(key))
+            seen[key] = a.ticker
 
 
 def test_sector_commodity_rates_have_themes():
@@ -119,6 +141,54 @@ def test_fetch_index_members_rejects_truncated_page():
     html = (FIX / "universe_sp500.html").read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="layout changed"):
         fetch_index_members("sp500", get=lambda url, **kw: _Resp(html))
+
+
+# --- one share class per company (ADR 0002 item 2) --------------------------------------------
+
+# (listings as (ticker, Wikipedia Security name), tickers kept). Experiment 0003: GOOG/GOOGL,
+# FOX/FOXA and NWS/NWSA produced identical GKG features, double-counting one company.
+# Same company = same name once the class marker ("(Class A)", "Class B") is removed. The
+# preferred class is listed explicitly; otherwise the alphabetically first ticker is kept.
+SHARE_CLASS_CASES: list[tuple[list[tuple[str, str]], set[str]]] = [
+    ([("GOOGL", "Alphabet Inc. (Class A)"), ("GOOG", "Alphabet Inc. (Class C)")], {"GOOGL"}),
+    ([("GOOG", "Alphabet Inc. (Class C)"), ("GOOGL", "Alphabet Inc. (Class A)")], {"GOOGL"}),
+    ([("FOX", "Fox Corporation (Class B)"), ("FOXA", "Fox Corporation (Class A)")], {"FOXA"}),
+    ([("NWS", "News Corp (Class B)"), ("NWSA", "News Corp (Class A)")], {"NWSA"}),
+    # marker with or without parentheses, any case
+    ([("NWS", "News Corp class B"), ("NWSA", "News Corp (Class A)")], {"NWSA"}),
+    # a pair not in the preference list: alphabetically first ticker
+    ([("UAA", "Under Armour (Class A)"), ("UA", "Under Armour (Class C)")], {"UA"}),
+    # different companies sharing a word are not merged
+    ([("FOXA", "Fox Corporation (Class A)"), ("FOXF", "Fox Factory")], {"FOXA", "FOXF"}),
+    # a lone class listing is kept as is
+    ([("BRK-B", "Berkshire Hathaway"), ("BF-B", "Brown–Forman")], {"BRK-B", "BF-B"}),
+]
+
+
+def _stock(ticker: str, name: str) -> Asset:
+    return Asset(ticker=ticker, name=name, kind="stock", track="B", group="sp500")
+
+
+@pytest.mark.parametrize(("listings", "kept"), SHARE_CLASS_CASES)
+def test_one_share_class(listings, kept):
+    out = _one_share_class([_stock(t, n) for t, n in listings])
+    assert {a.ticker for a in out} == kept
+    assert [a.ticker for a in out] == sorted(a.ticker for a in out)
+
+
+def _constituents_html(rows: list[tuple[str, str]]) -> str:
+    body = "".join(f"<tr><td>{t}</td><td>{n}</td></tr>" for t, n in rows)
+    return ('<html><body><table id="constituents"><tr><th>Symbol</th><th>Security</th></tr>'
+            f"{body}</table></body></html>")
+
+
+def test_fetch_index_members_keeps_one_share_class(monkeypatch):
+    rows = [("GOOGL", "Alphabet Inc. (Class A)"), ("GOOG", "Alphabet Inc. (Class C)"),
+            ("FOXA", "Fox Corporation (Class A)"), ("FOX", "Fox Corporation (Class B)"),
+            ("NWSA", "News Corp (Class A)"), ("NWS", "News Corp (Class B)"), ("MMM", "3M")]
+    monkeypatch.setitem(universe_mod._MIN_MEMBERS, "sp500", 1)
+    out = fetch_index_members("sp500", get=lambda url, **kw: _Resp(_constituents_html(rows)))
+    assert [a.ticker for a in out] == ["FOXA", "GOOGL", "MMM", "NWSA"]
 
 
 def test_fetch_index_members_unknown_index():

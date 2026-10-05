@@ -202,6 +202,34 @@ AMBIGUOUS_CASES: list[tuple[str, bool]] = [
     ("mcdonald", True),
     ("mcdonalds", False),
 
+    # Experiment 0003 (dev GKG counts): a place name that a news event made huge. "eaton" matched
+    # the January 2025 Eaton Fire (12,396 docs in one week against ~100 a week before). The bare
+    # place is ambiguous; the strong-suffixed company forms are not.
+    ("eaton", True),
+    # "co" on an ambiguous core is generic (_GENERIC_ON_AMBIGUOUS), so "eaton co" (2,993 dev docs)
+    # goes with "eaton"; disclosed in ADR 0002's implementation notes.
+    ("eaton co", True),
+    ("eaton corp", False),
+    ("eaton corporation", False),
+    ("eaton plc", False),
+
+    # Experiment 0003: cores cited as a source, market or data vendor stay ambiguous with ANY
+    # trailing legal suffix, because the boilerplate itself carries the suffix ("source:
+    # Morningstar Inc", "Nasdaq Inc" in listing notices). Measured over dev: morningstar inc 138k,
+    # nasdaq inc 77k, gartner inc 47k docs, mostly not about the company.
+    ("nasdaq inc", True),
+    ("gartner inc", True),
+    ("morningstar inc", True),
+    ("morningstar", True),
+    ("nasdaq corp", True),
+    ("gartner group inc", True),
+    ("morningstar inc co", True),
+    # ...only those cores: word-like cores keep their strong-suffixed forms.
+    ("apple inc", False),
+    ("google llc", False),
+    ("target corp", False),
+    ("nasdaq omx group", False),
+
     # Coined brand words are unambiguous even though they are single tokens.
     ("boeing", False),
     ("intel", False),
@@ -213,4 +241,25 @@ AMBIGUOUS_CASES: list[tuple[str, bool]] = [
     # Case and surrounding whitespace do not matter.
     ("  Apple ", True),
     ("Best Buy", False),
+]
+
+# --- make_aliases + is_ambiguous together (what load-universe keeps) -------------------------
+
+# (index name, ticker, must_keep, must_drop) over
+# [a for a in make_aliases(name, ticker) if not is_ambiguous(a)]. These are the triggering inputs
+# of experiment 0003; an empty must_keep is pinned by NO_ALIAS_NAMES (the company gets no alias).
+KEPT_CASES: list[tuple[str, str, set[str], set[str]]] = [
+    ("Eaton Corporation", "ETN", {"eaton corporation", "eaton corp", "eaton inc"},
+     {"eaton", "eaton co"}),
+    ("Nasdaq, Inc.", "NDAQ", set(), {"nasdaq", "nasdaq inc", "nasdaq corp", "nasdaq co"}),
+    ("Gartner", "IT", set(), {"gartner", "gartner inc", "gartner corp"}),
+    ("Morningstar, Inc.", "MORN", set(), {"morningstar", "morningstar inc"}),
+    # unaffected neighbours
+    ("Apple Inc.", "AAPL", {"apple inc", "apple corp"}, {"apple"}),
+    ("Tesla, Inc.", "TSLA", {"tesla", "tesla inc"}, set()),
+]
+
+# Listings that keep no alias at all after filtering.
+NO_ALIAS_NAMES: list[tuple[str, str]] = [
+    ("Nasdaq, Inc.", "NDAQ"), ("Gartner", "IT"), ("Morningstar, Inc.", "MORN"),
 ]

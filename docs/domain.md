@@ -16,12 +16,15 @@ organisation aliases).
 | **Entity** | The GDELT-side key of a `gdelt_daily` row: a FIPS 10-4 country code, `_GLOBAL` (all entities), a GKG theme, or a lowercase GKG organisation alias. |
 | **Metric, value_sum, n** | A raw daily aggregate kept as a numerator (`value_sum`) and a denominator (`n`) so sums over days, countries or aliases stay exact. Meanings per metric are below. |
 | **Stat** | What a feature computes from `value_sum` and `n`: `mean` = value_sum / n; `count` = n; `sum` = value_sum; `share` = n / n(_GLOBAL); `sum_share` = value_sum / value_sum(_GLOBAL of a denominator metric). |
-| **Surprise** | z-score (`_z.<w>`) or log-ratio (`_lr.<w>`) of a stat against the entity's own trailing `w`-day baseline that excludes the current period. `.0` = untransformed level. |
-| **Feature name** | `<source>.<metric>[/<denominator>].<stat>[<k>d]_<z\|lr>.<window>`, e.g. `events.root_19_fight/n_events.sum_share_z.60`; `<k>d` = summed over k trading days (A3 weekly). |
+| **Surprise** | A stat against the entity's own trailing `w`-day baseline that excludes the current period (features v2, ADR 0002). `_z.<w>` = (x - mean) / std, NaN when std < 1e-9, clipped to +-10. `_lr.<w>` = ln((x + k) / (mean + k)) with k = one count in the stat's units (1 for count/sum, 1/n for mean, 1/denominator for share/sum_share), so it is defined on zero days. `_sm5_z.<w>` = mean of the last 5 z values (all 5 required), the low-turnover variant. `.0` = untransformed level. |
+| **Feature name** | `<source>.<metric>[/<denominator>].<stat>[<k>d]_<z\|lr\|sm5_z>.<window>`, e.g. `events.root_19_fight/n_events.sum_share_z.60`; `<k>d` = summed over k trading days (A3 weekly). Build names with `features.feature_name(spec, transform)`. |
+| **Features version** | `features.FEATURES_VERSION` (2 since ADR 0002). Every signal trial's params carry it as `features_version`; v1 trials have no such key. The store does not record which version built the stored features: `signal-study` refuses when no `sm5` feature is stored (a v1 build). |
 | **Label** | `ret_oo` = adj_open[t+1+h] / adj_open[t+1] - 1, the tradable return of a signal formed at t's cutoff. `ret_overnight` (close t -> open t+1) and `ret_intraday` are diagnostics, not tradable. |
 | **Trial** | One evaluated configuration on one data window, logged append-only, failures included; DSR and PBO need all of them. Stages: signal, model, backtest, holdout. |
 | **IC** | Daily cross-sectional Spearman correlation between a feature and a label over the names present that day. |
-| **Gate 1/2/3/4** | ADR 0001: signal gate (\|NW t\| >= 3, sign held in 2 of 3 sub-periods, spread beats costs); model gate; overfitting gate (DSR >= 0.95, PBO < 0.5); hold-out (bootstrap CI excludes 0). |
+| **Gate 1/2/3/4** | ADR 0001: signal gate (\|NW t\| >= 3, sign held in 2 of 3 sub-periods, spread beats costs); model gate; overfitting gate (DSR >= 0.95, PBO < 0.5); hold-out (bootstrap CI excludes 0). ADR 0002 amends gate 1: the observed IC sign must equal the pre-registered sign (H0 has none and accepts either), and cost = 4 x per-leg cost x min(1, h x turnover). |
+| **Pre-registered sign** | `_Family.sign` in `cli/pipelines.py`, written before any data was seen: A1 conflict counts -1, Goldstein +1, A2/A3 +1, B1 +1, B2 -1, H0 None. `backtest` refuses a feature with no sign unless `--sign` is given. |
+| **A4 vol gate (v2)** | Label = ln(realised vol over t+1..t+h / realised vol over t-21..t). IC = Spearman of the residuals of feature and label after a per-day cross-sectional OLS on ln rv5, ln rv22, ln rv60 and ln expanding long-run vol (all ending at t). Passes on \|NW t\| >= 3 with the expected sign held in 2 of 3 sub-periods, and only if the placebo (each ticker's expanding mean of its own earlier feature values) does not pass. Expected sign is "positive in shock units": +1 for A1 conflict counts, -1 for Goldstein (a shock is a low Goldstein). |
 
 ## Timing
 
@@ -73,6 +76,9 @@ organisation aliases).
 - **A mention is not an article about the company.** Boeing, Intel, Chevron, Alcoa mentions were
   ~9-10 of 12 on topic; Google, Netflix, Hyatt, Verizon 1-2 of 12; Nasdaq, New York Times,
   Gartner 0 of 12 (cited as sources or ticker tags). `core/aliases.is_ambiguous` drops these.
+  Nasdaq, Gartner and Morningstar are dropped with any legal suffix too (`nasdaq inc`, `gartner
+  inc`, `morningstar inc`: 138k/77k/47k docs in experiment 0003), so NDAQ, IT and MORN have no
+  GKG alias. Bare `eaton` is mostly the January 2025 Eaton Fire; `eaton corp` and `eaton plc` stay.
 - **Duplicates.** GLOBALEVENTID is unique, but ~30% of event rows repeat (UTC day, SOURCEURL,
   EventCode, ActionGeo FeatureID + country): one article coded with different actor strings. The
   events query counts each such group once.
@@ -103,10 +109,16 @@ map like its `fips_countries`. GKG tone is roughly -10..+10 (positive minus nega
 
 - **Combine entities on raw sums, never on means or z-scores.** A multi-country ETF's mean is the
   article-weighted mean (sum value_sum / sum n), not the mean of country means.
-- **An article matching two aliases of one stock counts twice.** Deduplication needs
-  article-level data and belongs in the query.
-- **Missing is not zero.** A day with no rows of a source at all (an outage) is NaN. An entity's
-  count is 0 on observed days only after its first appearance; before that it is NaN.
+- **An article matching two aliases of one stock counts twice in the numerator.** Deduplication
+  needs article-level data and belongs in the query (`gkg_orgs_daily.sql` is DISTINCT per alias,
+  not per ticker). The denominator is different: `org_docs`' n is the day's total documents and is
+  counted once per ticker, never summed over aliases (features v2; v1 divided by the number of
+  aliases hit). Metrics with a day-total n are listed in `features.DAY_TOTAL_N_METRICS`.
+- **Missing is not zero, but no mention is.** A day with no rows of a source at all (an outage) is
+  NaN. After an entity's first appearance, count metrics are 0 on observed days with no rows
+  (events and GKG orgs; `org_docs` then gets n = the day total, so its share is 0). Tone and
+  Goldstein means stay NaN on zero days. Before the first appearance everything is NaN, so a
+  ticker's presence at t never depends on later mentions.
 - **GKG cost is a column scan.** It does not depend on how many themes or aliases are requested,
   so fix the full lists before pulling.
 
@@ -121,7 +133,12 @@ map like its `fips_countries`. GKG tone is roughly -10..+10 (positive minus nega
 - Stooq answers scripted CSV requests with a JavaScript proof-of-work page (as of 2026-10), so
   there is no free second price source for cross-checks right now.
 - Wikipedia S&P lists carry current members only (survivorship bias in Track B), use dotted share
-  classes (BRK.B; Yahoo uses BRK-B), and short brand names rather than legal names.
+  classes (BRK.B; Yahoo uses BRK-B), and short brand names rather than legal names. They list
+  both share classes of a few companies (GOOG/GOOGL, FOX/FOXA, NWS/NWSA); `fetch_index_members`
+  keeps one per company (GOOGL, FOXA, NWSA), and `load-universe` deletes the track's stored
+  tickers that are no longer listed.
+- Track A rates ETFs (TLT, IEF, SHY) have no country mapping since ADR 0002; only SPY maps to
+  `US`. Before that all four shared one identical `US` feature.
 - `first_trade` is Yahoo's first bar, not the official inception date. KSA, XLRE, XLC start after
   2015-03-02.
 
@@ -131,8 +148,11 @@ map like its `fips_countries`. GKG tone is roughly -10..+10 (positive minus nega
   least h-1, or the t-stat is overstated by about sqrt(h).
 - **"Same sign in 2 of 3 sub-periods" is relative to the full-sample sign**; three nonzero numbers
   always have two sharing a sign among themselves.
-- **Negative expected signs (A1, B2) are traded short-top/long-bottom**; the gate's spread is
-  applied in the direction of the IC.
+- **Negative expected signs (A1, B2) are traded short-top/long-bottom**; the gate's sub-periods
+  and spread are measured in the pre-registered direction (the observed one only for H0). A
+  strong IC of the wrong sign fails (experiment 0003: massviolence `share_z.60` t = +3.07 against
+  a registered -1).
+- **`sm5` features are evaluated at h = 5 and 20 only**, at gate 1 and in A4.
 - **An IC in ret_overnight but not ret_oo is stale pricing**, not an edge: country ETFs whose home
   market closed before the US session carry stale prices.
 - **PSR, E[max SR] and DSR take per-period Sharpe ratios and raw (Pearson) kurtosis** (Normal = 3).

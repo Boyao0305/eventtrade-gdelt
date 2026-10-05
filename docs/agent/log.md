@@ -123,3 +123,64 @@ these count toward the DSR N.
   - US-tied ETFs; `eaton` and `<ambiguous> inc` aliases.
 - Open: A2 untested (no theme rows). Cost leg (4x, ~0.6 turnover) needs IC 0.03-0.05 at h=1/5,
   above the ADR prior. Decide whether that is intended.
+
+# ADR 0002 implementation (features v2, gates, universe) — 2026-10-05
+
+Three agents worked in parallel (features, gates, universe), then one integration pass. Nothing
+is committed, no trial was logged and the SQLite db was not written.
+
+- Features v2 (`core/features.py`, `FEATURES_VERSION = 2`): pseudo-count lr, z floor and clip,
+  count zero-fill after first appearance, `org_docs` divided by the day total once, and the new
+  `sm5` transform. `feature_name(spec, transform)` is now the only way names are built.
+- Gates: `passes_gate(..., expected_sign=)` is required. A4 v2 uses `vol_surprise_label`,
+  `vol_controls`, `partial_ic`, `placebo_feature` and `vol_gate`. Signal trial params carry
+  `features_version` and `expected_sign`. sm5 features run at h = 5 and 20 only. H0's sign is
+  None, and `backtest` refuses H0 unless `--sign` is given.
+- Universe: TLT/IEF/SHY have no countries, there is one share class per company, `eaton` is
+  ambiguous, and `nasdaq`/`gartner`/`morningstar` are dropped with any suffix.
+- Integration: `load_universe` now deletes a reloaded track's tickers that are no longer listed
+  (new `SqliteStore.delete_assets`; tests `test_delete_assets_removes_only_named_tickers` and
+  `test_load_universe_drops_stale_rows_of_reloaded_track`). Added
+  `schemas.VOL_CONTROL_COLUMNS` (and `labels.VOL_CONTROL_NAMES` is derived from it) and updated
+  the vol label comment. Updated README CLI table, `docs/domain.md` and `docs/components/cli.md`,
+  and added implementation notes to ADR 0002.
+- Verified: the full fast suite (`pytest -q`) and `lint-imports` (6 contracts kept). Ruff is clean
+  on changed files; the 10 remaining ruff errors are older ones in store.py, prices.py and
+  test_store.py.
+
+Next, in order: `load-universe` (removes GOOG/FOX/NWS and fixes TLT/IEF/SHY in the db),
+`build-dataset --track A` and `--track B` (v2 features), then `signal-study`. Each v2 trial adds
+to the DSR N.
+
+Open decisions for the user, defaults recorded in ADR 0002's implementation notes:
+- A4 sign in shock units (Goldstein expected -1) vs the literal +1 for every feature.
+- sm5 on every z family (including A3 and A2) vs a narrower set, which means fewer trials.
+- The store does not record the features version; `signal-study` treats "no sm5 feature" as a v1
+  build. A meta table would make this exact.
+- `gkg_orgs_daily.sql` still counts a doc naming two aliases of one ticker twice in the
+  numerator. Fixing it needs per-ticker matching in SQL and a re-pull.
+- `core/models.select_features` still takes the IC sign from the fold's data (model inputs). It
+  needs the registered sign if it should match ADR 0002 item 3.
+- TLT and IEF have identical `gkg_themes`, so they will produce identical A2 features once themes
+  are pulled.
+
+# ADR 0002 conformance review fixes — 2026-10-05
+
+Fixer pass on two minor conformance findings. Nothing committed, no trial logged, db not written.
+
+- **Backtest params had no `features_version`** (ADR 0002 item 5). Reproduced: rule and model
+  backtest params lacked the key, so a v2 backtest hashed to the same trial id as the v1 one and
+  would have been reported "identical trial already logged". Fixed in `pipelines.backtest`
+  (both kinds; hold-out trials inherit it from their source params). Regression test
+  `test_backtest_params_carry_features_version`: it failed with KeyError before the fix, and it
+  checks that a v1-style backtest row already in the store does not block the v2 row. No
+  backtest trial exists in the db yet, so no stored row is affected.
+- **Alias drops wider than the ADR text.** Reproduced with `make_aliases` + `is_ambiguous`:
+  NDAQ, IT and MORN keep no alias, and ETN loses `eaton` and `eaton co`. Kept the broader
+  `_CITED_ANY_FORM` rule because the boilerplate carries every suffix, and the extra forms are
+  1-50 dev docs each. Disclosed it in ADR 0002's implementation notes: NDAQ/IT/MORN leave Track
+  B GKG, `eaton co` (2,993 docs) goes with `eaton`, and the notes say how to switch to the literal
+  reading. Pinned `("eaton co", True)` in `AMBIGUOUS_CASES` and added it to ETN's must-drop set in
+  `KEPT_CASES`.
+- Verified: `pytest -q` 861 passed, 8 deselected; `lint-imports` 6 contracts kept; ruff clean on
+  the changed files.

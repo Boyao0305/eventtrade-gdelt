@@ -12,12 +12,22 @@ from eventtrade.core.evaluate import (
     evaluate_signal,
     ic_by_return_leg,
     newey_west_t,
+    partial_ic,
     passes_gate,
+    placebo_feature,
     quantile_spread,
     quantile_turnover,
     subperiod_signs,
+    vol_gate,
 )
-from eventtrade.schemas import FEATURE_COLUMNS, LABEL_COLUMNS, SignalReport
+from eventtrade.core.labels import realized_vol_label, vol_controls, vol_surprise_label
+from eventtrade.schemas import (
+    FEATURE_COLUMNS,
+    LABEL_COLUMNS,
+    PRICE_COLUMNS,
+    VOL_LABEL_COLUMNS,
+    SignalReport,
+)
 
 D1, D2, D3 = pd.Timestamp("2020-01-02"), pd.Timestamp("2020-01-03"), pd.Timestamp("2020-01-06")
 
@@ -314,14 +324,53 @@ GATE_CASES = [
 
 @pytest.mark.parametrize("name,report,subs,cost_bps,expected", GATE_CASES, ids=[c[0] for c in GATE_CASES])
 def test_passes_gate(name, report, subs, cost_bps, expected):
-    ok, reason = passes_gate(report, subs, cost_bps)
+    # expected_sign=None is H0's "either sign": these cases pin the mechanics of each leg.
+    ok, reason = passes_gate(report, subs, cost_bps, expected_sign=None)
     assert ok is expected
     assert reason.startswith("pass" if expected else "fail")
 
 
 def test_gate_reason_lists_every_failure():
-    ok, reason = passes_gate(_report(1.0, -0.01), [0.02, -0.01, -0.03], 10)
+    ok, reason = passes_gate(_report(1.0, -0.01), [0.02, -0.01, -0.03], 10, expected_sign=None)
     assert not ok and "NW t" in reason and "sub-periods" in reason and "spread" in reason
+
+
+# ADR 0002 item 3: the observed IC sign must equal the pre-registered sign (H0: None, either).
+# Spread 30bp vs cost 4*10bp*min(1, 5*0.1) = 20bp, so only the sign decides these cases.
+POS_SUBS, NEG_SUBS = [0.02, 0.01, 0.03], [-0.02, -0.01, -0.03]
+SIGN_CASES = [
+    ("+ registered, + observed", _report(3.5, 0.003), POS_SUBS, 1.0, True),
+    ("- registered, - observed", _report(-3.5, -0.003), NEG_SUBS, -1.0, True),
+    ("none registered, + observed", _report(3.5, 0.003), POS_SUBS, None, True),
+    ("none registered, - observed", _report(-3.5, -0.003), NEG_SUBS, None, True),
+    ("+ registered, - observed", _report(-3.5, -0.003), NEG_SUBS, 1.0, False),
+    ("- registered, + observed", _report(3.5, 0.003), POS_SUBS, -1.0, False),
+    # Experiment 0003 regression: A1 root_20_massviolence share_z.60 h=1 had NW t +3.07 and
+    # positive sub-periods against A1's pre-registered NEGATIVE sign. With a spread that clears
+    # cost, the v1 gate (sign from the data) would have logged it as a pass.
+    ("exp0003 A1 wrong sign", _report(3.07, 0.003, 0.1, 1), [0.0119, 0.0118, 0.0060], -1.0, False),
+    # Sub-periods are counted in the registered direction: 2 of 3 negative passes for sign -1.
+    ("- registered, 2/3 negative", _report(-4.0, -0.003), [-0.02, -0.01, 0.01], -1.0, True),
+]
+
+
+@pytest.mark.parametrize("name,report,subs,sign,expected", SIGN_CASES, ids=[c[0] for c in SIGN_CASES])
+def test_passes_gate_enforces_registered_sign(name, report, subs, sign, expected):
+    ok, reason = passes_gate(report, subs, 10, expected_sign=sign)
+    assert ok is expected, reason
+    if not expected:
+        assert "pre-registered sign" in reason
+
+
+def test_passes_gate_needs_explicit_sign_argument():
+    with pytest.raises(TypeError):
+        passes_gate(_report(3.5, 0.003), POS_SUBS, 10)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("bad", [0.0, 0.5, 2.0, float("nan")])
+def test_passes_gate_rejects_bad_sign(bad):
+    with pytest.raises(ValueError):
+        passes_gate(_report(3.5, 0.003), POS_SUBS, 10, expected_sign=bad)
 
 
 # --- evaluate_signal and the overnight diagnostic -------------------------------------------
@@ -347,7 +396,7 @@ def test_evaluate_signal_strong_signal_passes():
     assert rep.decay[5] > rep.decay[1] > 0.3
     assert rep.ic_t > 3 and rep.q_spread_mean > 0 and 0.5 < rep.turnover <= 1
     ic = daily_ic(f, lab, 1)
-    ok, reason = passes_gate(rep, subperiod_signs(ic), cost_bps=5)
+    ok, reason = passes_gate(rep, subperiod_signs(ic), cost_bps=5, expected_sign=1.0)
     assert ok, reason
 
 
@@ -371,3 +420,180 @@ def test_ic_by_return_leg_separates_overnight():
     assert set(out) == {"ret_oo", "ret_overnight", "ret_intraday"}
     assert out["ret_overnight"] == pytest.approx(1.0)
     assert abs(out["ret_oo"]) < 0.15 and abs(out["ret_intraday"]) < 0.15
+
+
+# --- A4 v2 gate (ADR 0002 item 4): partial IC on vol controls, plus a static placebo ----------
+
+CTL = ["c1", "c2", "c3", "c4"]
+
+
+def _vol_frames(n_days: int, n_names: int, seed: int, make) -> tuple[pd.DataFrame, ...]:
+    """make(rng, controls (n x 4), static (n,), info (n,)) -> (feature, label) arrays per date.
+
+    `static` is a fixed per-ticker offset, `info` is fresh every date; both are independent of
+    the controls. Returns (feature, label, controls) in FEATURE / VOL_LABEL / control columns.
+    """
+    rng = np.random.default_rng(seed)
+    static = rng.normal(size=n_names)
+    f, lab, ctl = [], [], []
+    for d in pd.bdate_range("2018-01-01", periods=n_days):
+        c = rng.normal(size=(n_names, 4))
+        x, y = make(rng, c, static, rng.normal(size=n_names))
+        for i in range(n_names):
+            f.append((d, f"T{i:02d}", "f", x[i]))
+            lab.append((d, f"T{i:02d}", 5, y[i]))
+            ctl.append((d, f"T{i:02d}", *c[i]))
+    return (pd.DataFrame(f, columns=FEATURE_COLUMNS),
+            pd.DataFrame(lab, columns=VOL_LABEL_COLUMNS),
+            pd.DataFrame(ctl, columns=["date", "ticker", *CTL]))
+
+
+def _raw_ic(f, lab, h=5):
+    return daily_ic(f, lab.rename(columns={"value": "vol"}), h, label_col="vol")
+
+
+def test_partial_ic_exact_function_of_controls_has_no_dates():
+    # Feature is an exact linear function of the controls: its residual is zero on every date,
+    # the correlation is undefined, and the date is skipped (never a spurious rank IC of noise).
+    f, lab, ctl = _vol_frames(60, 30, 0, lambda r, c, s, i: (
+        2.0 + c[:, 0] - 0.5 * c[:, 2], 0.8 * c[:, 0] + 0.3 * c[:, 1] + r.normal(size=len(s))))
+    assert newey_west_t(_raw_ic(f, lab), horizon=5) > 10  # raw IC is all controls
+    assert len(partial_ic(f, lab, ctl, 5)) == 0
+
+
+def test_partial_ic_near_function_of_controls_is_near_zero():
+    # Feature and label share only the controls (plus independent noise): raw IC passes, the
+    # residual IC is ~0.
+    f, lab, ctl = _vol_frames(400, 30, 1, lambda r, c, s, i: (
+        c[:, 0] + c[:, 1] + 0.2 * r.normal(size=len(s)),
+        c[:, 0] + c[:, 1] + r.normal(size=len(s))))
+    raw = _raw_ic(f, lab)
+    assert raw.mean() > 0.5 and newey_west_t(raw, horizon=5) > 10
+    ic = partial_ic(f, lab, ctl, 5)
+    assert len(ic) == 400
+    assert abs(ic.mean()) < 0.02 and abs(newey_west_t(ic, horizon=5)) < 3
+
+
+def test_partial_ic_recovers_independent_information():
+    # Feature = info + controls, label = 0.3*info + controls + noise: the partial IC equals the
+    # IC of info against the label's non-control part.
+    def make(r, c, s, info):
+        noise = r.normal(size=len(s))
+        return info + 2.0 * c[:, 0] - c[:, 3], 0.3 * info + noise + c[:, 0] + c[:, 1]
+    f, lab, ctl = _vol_frames(300, 40, 2, make)
+    ic = partial_ic(f, lab, ctl, 5)
+    # oracle: the same draws without the controls
+    f0, lab0, _ = _vol_frames(300, 40, 2, lambda r, c, s, i: (i, 0.3 * i + r.normal(size=len(s))))
+    oracle = _raw_ic(f0, lab0)
+    assert len(ic) == 300
+    assert ic.mean() == pytest.approx(oracle.mean(), abs=0.02)
+    assert 0.2 < ic.mean() < 0.35 and newey_west_t(ic, horizon=5) > 3
+
+
+def test_partial_ic_uses_only_requested_horizon_and_complete_rows():
+    f, lab, ctl = _vol_frames(20, 12, 3, lambda r, c, s, i: (i, i + 0.1 * r.normal(size=len(s))))
+    other = lab.assign(horizon=1, value=0.0)
+    ic = partial_ic(f, pd.concat([lab, other]), ctl, 5)
+    assert len(ic) == 20 and (ic > 0).all()
+    # a name with a NaN control is dropped from that date only: 12 -> 11 names still enough
+    ctl2 = ctl.copy()
+    ctl2.loc[0, "c1"] = np.nan
+    assert len(partial_ic(f, lab, ctl2, 5)) == 20
+    # too few names for 4 controls + intercept (needs 8): every date skipped
+    six = [f"T{i:02d}" for i in range(6)]
+    small = [frame[frame["ticker"].isin(six)] for frame in (f, lab, ctl)]
+    assert len(partial_ic(*small, 5)) == 0
+
+
+def test_placebo_feature_is_trailing_expanding_mean():
+    d = pd.bdate_range("2020-01-01", periods=4)
+    f = pd.DataFrame({"date": list(d) * 2, "ticker": ["A"] * 4 + ["B"] * 4, "feature": "f",
+                      "value": [1.0, 3.0, np.nan, 8.0, 10.0, 20.0, 30.0, 40.0]})
+    p = placebo_feature(f.sample(frac=1.0, random_state=0))  # row order does not matter
+    got = p.set_index(["ticker", "date"])["value"]
+    # A: t0 has nothing before it -> NaN; t1 mean(1); t2 the feature is missing, so the placebo is
+    # too (same sample as the feature); t3 mean(1, 3), the missing t2 skipped.
+    a = got["A"].tolist()
+    assert math.isnan(a[0]) and a[1] == 1.0 and math.isnan(a[2]) and a[3] == 2.0
+    assert math.isnan(got["B"].iloc[0]) and got["B"].tolist()[1:] == [10.0, 15.0, 20.0]
+    assert list(p.columns) == FEATURE_COLUMNS and set(p["feature"]) == {"f"}
+
+
+def test_vol_gate_dynamic_information_passes():
+    f, lab, ctl = _vol_frames(300, 30, 4, lambda r, c, s, i: (i, 0.5 * i + r.normal(size=len(s))))
+    res = vol_gate(f, lab, ctl, 5, expected_sign=1.0)
+    assert res.ok, res.reason
+    assert res.ic_t >= 3 and not res.placebo_pass and abs(res.placebo_t) < 3
+
+
+def test_vol_gate_wrong_sign_fails():
+    # Experiment 0003: protest share_lr.60 was logged as an A4 pass with a NEGATIVE IC, against
+    # A4's pre-registered positive sign.
+    f, lab, ctl = _vol_frames(300, 30, 5, lambda r, c, s, i: (i, -0.5 * i + r.normal(size=len(s))))
+    res = vol_gate(f, lab, ctl, 5, expected_sign=1.0)
+    assert not res.ok and res.ic_t <= -3 and "pre-registered sign" in res.reason
+
+
+def test_vol_gate_static_offset_fails_through_placebo():
+    # Feature = static per-ticker offset + noise, label carries the same static offset: the
+    # feature's partial IC passes, but so does its trailing-mean placebo, so the gate fails.
+    f, lab, ctl = _vol_frames(300, 30, 6, lambda r, c, s, i: (
+        s + 0.5 * r.normal(size=len(s)), s + r.normal(size=len(s))))
+    res = vol_gate(f, lab, ctl, 5, expected_sign=1.0)
+    assert res.ic_t >= 3 and res.placebo_pass
+    assert not res.ok and "placebo" in res.reason
+
+
+def test_vol_gate_notes_are_json_ready():
+    f, lab, ctl = _vol_frames(60, 20, 10, lambda r, c, s, i: (i, i + r.normal(size=len(s))))
+    notes = vol_gate(f, lab, ctl, 5, expected_sign=1.0).notes()
+    assert {"gate", "ic_mean", "ic_t", "subperiod_ic", "n_days", "placebo_ic_mean", "placebo_t",
+            "placebo_subperiod_ic", "placebo_pass"} <= set(notes)
+    assert notes["gate"].split(":")[0] in ("pass", "fail")
+
+
+def _iid_prices(n_days: int, n_names: int, seed: int, vol_z=None):
+    """iid normal log returns with per-ticker vol sigma_i * exp(0.4 z[s, i]) (z = 0 if None)."""
+    rng = np.random.default_rng(seed)
+    sig = np.exp(rng.uniform(np.log(0.003), np.log(0.03), n_names))
+    z = np.zeros((n_days, n_names)) if vol_z is None else vol_z
+    r = rng.normal(size=(n_days, n_names)) * sig * np.exp(0.4 * z)
+    close = 100 * np.exp(np.cumsum(r, axis=0))
+    days = pd.bdate_range("2016-01-04", periods=n_days)
+    rows = [(d, f"T{j:02d}", 1.0, 1.0, 1.0, 1.0, 1.0, close[k, j], close[k, j])
+            for k, d in enumerate(days) for j in range(n_names)]
+    return pd.DataFrame(rows, columns=PRICE_COLUMNS), sig, days
+
+
+def test_exp0003_static_vol_level_case_fails_v2_gate():
+    # Experiment 0003's A4 artefact: a per-ticker constant feature ranks with the forward vol
+    # LEVEL (static placebo t ~ 36 on real data). Reproduce it: feature = ln(sigma_i), constant
+    # over time, and returns with no time variation in vol at all.
+    prices, sig, days = _iid_prices(400, 30, 7)
+    f = pd.DataFrame([(d, f"T{j:02d}", "f", float(np.log(sig[j])))
+                      for d in days for j in range(30)], columns=FEATURE_COLUMNS)
+    h = 5
+    raw = daily_ic(f, realized_vol_label(prices, h).rename(columns={"value": "vol"}), h,
+                   label_col="vol")
+    assert newey_west_t(raw, horizon=h) > 10 and all(m > 0 for m in subperiod_signs(raw))
+    res = vol_gate(f, vol_surprise_label(prices, h), vol_controls(prices), h, expected_sign=1.0)
+    assert not res.ok, res.reason
+    # The partial IC alone is not enough here: with an expanding long-run vol estimated from few
+    # returns, the true per-ticker level still predicts ln(fwd / trailing vol) beyond the noisy
+    # controls (partial t ~ 5.8, decaying over sub-periods as the estimate converges). The
+    # placebo, which is the same static level, passes too, and that is what fails the feature.
+    assert abs(res.ic_t) < 3 or res.placebo_pass
+    assert res.placebo_pass and "placebo" in res.reason
+
+
+def test_v2_gate_recovers_a_real_vol_shock_from_prices():
+    # Positive control: the feature at t is the log vol multiplier of day t+1, which trailing
+    # prices cannot know. The v2 gate must still pass it.
+    n_days, n_names = 400, 30
+    z = np.random.default_rng(8).normal(size=(n_days, n_names))
+    prices, _, days = _iid_prices(n_days, n_names, 9, vol_z=z)
+    f = pd.DataFrame([(days[k], f"T{j:02d}", "f", float(z[k + 1, j]))
+                      for k in range(n_days - 1) for j in range(n_names)], columns=FEATURE_COLUMNS)
+    res = vol_gate(f, vol_surprise_label(prices, 1), vol_controls(prices), 1, expected_sign=1.0)
+    assert res.ok, res.reason
+    assert res.ic_mean > 0.15 and not res.placebo_pass

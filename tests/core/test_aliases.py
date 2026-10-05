@@ -1,9 +1,34 @@
 """Runs the case table in alias_cases.py against core/aliases.py."""
 
 import pytest
-from alias_cases import AMBIGUOUS_CASES, MAKE_CASES, PRIMARY_CASES, SAME_ALIAS_CASES
+from alias_cases import (
+    AMBIGUOUS_CASES,
+    KEPT_CASES,
+    MAKE_CASES,
+    NO_ALIAS_NAMES,
+    PRIMARY_CASES,
+    SAME_ALIAS_CASES,
+)
 
 from eventtrade.core.aliases import is_ambiguous, make_aliases
+
+
+def _kept(name: str, ticker: str) -> list[str]:
+    return [a for a in make_aliases(name, ticker) if not is_ambiguous(a)]
+
+
+@pytest.mark.parametrize(("name", "ticker", "keep", "drop"), KEPT_CASES)
+def test_kept_aliases(name: str, ticker: str, keep: set[str], drop: set[str]) -> None:
+    kept = set(_kept(name, ticker))
+    assert keep - kept == set(), f"missing for {name!r}"
+    assert drop & kept == set(), f"unexpected for {name!r}"
+    # every must_drop alias is actually generated, so the filter (not generation) drops it
+    assert drop <= set(make_aliases(name, ticker)), f"not generated for {name!r}"
+
+
+@pytest.mark.parametrize(("name", "ticker"), NO_ALIAS_NAMES)
+def test_no_alias_survives(name: str, ticker: str) -> None:
+    assert _kept(name, ticker) == []
 
 
 @pytest.mark.parametrize(("name", "ticker", "primary"), PRIMARY_CASES)

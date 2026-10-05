@@ -11,6 +11,7 @@ import pytest
 from eventtrade.adapters.store import SqliteStore
 from eventtrade.cli import pipelines as pl
 from eventtrade.config import Config
+from eventtrade.core.features import FEATURES_VERSION
 from eventtrade.schemas import GDELT_DAILY_COLUMNS, PRICE_COLUMNS, Asset, Trial
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
@@ -216,24 +217,83 @@ def test_load_universe_b_adds_aliases(cfg, store):
     assert ba.group == "sp500" and "boeing" in ba.org_aliases
 
 
+def test_load_universe_drops_stale_rows_of_reloaded_track(cfg, store):
+    # ADR 0002 item 2: v1 stored both share classes (GOOG and GOOGL, FOX/FOXA, NWS/NWSA) and
+    # TLT/IEF/SHY with fips ['US']. An upsert-only reload left GOOG/FOX/NWS in assets, so they
+    # kept being double-counted. Reloading a track now removes that track's absent tickers;
+    # other tracks are untouched.
+    def stock(t):
+        return Asset(ticker=t, name=t, kind="stock", track="B", group="sp500")
+
+    etf = Asset(ticker="TLT", name="TLT", kind="etf", track="A", group="rates",
+                fips_countries=["US"])
+    store.upsert_assets([stock("GOOG"), stock("GOOGL"), stock("FOX"), stock("FOXA"), etf])
+
+    def fetch_index(index):
+        return [stock("GOOGL"), stock("FOXA")] if index == "sp500" else []
+
+    assert pl.load_universe(cfg, store, "B", list, fetch_index, _silent) == pl.OK
+    assert [a.ticker for a in store.read_assets("B")] == ["FOXA", "GOOGL"]
+    assert [a.ticker for a in store.read_assets("A")] == ["TLT"]
+
+    fixed = etf.model_copy(update={"fips_countries": []})
+    assert pl.load_universe(cfg, store, "A", lambda: [fixed], fetch_index, _silent) == pl.OK
+    assert store.read_assets("A") == [fixed]
+
+
 # --- hypothesis tagging: feature names map back to the pre-registered table -------------------
 
 HYPOTHESIS_CASES = [
-    ("A", "events.tone.mean_z.60", ("H0", 1.0)),
+    # ADR 0002 item 3: H0 has no pre-registered sign (None = either sign at gate 1).
+    ("A", "events.tone.mean_z.60", ("H0", None)),
+    ("A", "events.n_events.share_sm5_z.60", ("H0", None)),
     ("A", "events.tone.mean5d_z.60", ("A3", 1.0)),
     ("A", "events.root_19_fight/n_events.sum_share_z.60", ("A1", -1.0)),
     ("A", "events.root_19_fight/n_events.sum_share_lr.60", ("A1", -1.0)),
+    ("A", "events.root_19_fight/n_events.sum_share_sm5_z.60", ("A1", -1.0)),
+    ("A", "events.goldstein.mean_z.60", ("A1", 1.0)),
     ("A", "gkg.theme_docs.mean_z.60", ("A2", 1.0)),
     ("B", "gkg.org_neg_docs.sum_lr.60", ("B2", -1.0)),
     ("B", "gkg.org_tone.mean.0", ("B1", 1.0)),
+    ("B", "gkg.org_docs.mean_sm5_z.60", ("B1", 1.0)),
     ("B", "gkg.org_docs.mean_z.60*gkg.org_tone.mean.0", ("B1", 1.0)),
-    ("A", "made.up.name", ("?", 1.0)),
+    ("A", "made.up.name", ("?", None)),
 ]
 
 
 @pytest.mark.parametrize("track,name,expected", HYPOTHESIS_CASES)
 def test_hypothesis_of(track, name, expected):
     assert pl.hypothesis_of(track, name) == expected
+
+
+A4_SIGN_CASES = [
+    # A4 is positive in shock units: a conflict count shock is HIGH (A1 sign -1) -> IC +1; a
+    # Goldstein shock is LOW (A1 sign +1) -> IC -1. Non-A1 features are not A4 features.
+    ("events.root_14_protest/n_events.sum_share_lr.60", 1.0),
+    ("events.root_20_massviolence/n_events.sum_share_sm5_z.60", 1.0),
+    ("events.goldstein.mean_z.60", -1.0),
+    ("events.tone.mean_z.60", None),
+]
+
+
+@pytest.mark.parametrize("name,expected", A4_SIGN_CASES)
+def test_a4_sign(name, expected):
+    assert pl._a4_sign(name) == expected
+
+
+HORIZON_CASES = [
+    # ADR 0002 item 1: sm5 is evaluated at h = 5 and 20 only; everything else at every horizon.
+    ("A", "events.tone.mean_sm5_z.60", [5, 20]),
+    ("B", "gkg.org_neg_docs.sum_sm5_z.60", [5, 20]),
+    ("A", "events.tone.mean_z.60", [1, 5, 20]),
+    ("A", "events.tone.mean5d_z.60", [1, 5, 20]),
+    ("B", "gkg.org_docs.mean_z.60*gkg.org_tone.mean.0", [1, 5, 20]),
+]
+
+
+@pytest.mark.parametrize("track,name,expected", HORIZON_CASES)
+def test_horizons_for(track, name, expected):
+    assert pl._horizons_for(track, name, [1, 5, 20]) == expected
 
 
 # --- end to end on synthetic Track A data ------------------------------------------------------
@@ -265,21 +325,97 @@ def test_build_signal_backtest_overfit(cfg, store):
     clock = lambda: NOW
     assert pl.signal_study(cfg, store, "A", clock, _silent) == pl.OK
     trials = store.read_trials("A", "signal")
-    n_names = feats["feature"].nunique()
-    n_a1 = sum(pl.hypothesis_of("A", f)[0] == "A1" for f in feats["feature"].unique())
-    assert len(trials) == n_names * len(cfg.horizons) + n_a1 * len(cfg.horizons)
+    names = [str(f) for f in feats["feature"].unique()]
+    assert any("_sm5_z." in n for n in names)
+    n_dir = sum(len(pl._horizons_for("A", n, cfg.horizons)) for n in names)
+    n_a4 = sum(len(pl._horizons_for("A", n, cfg.horizons)) for n in names
+               if pl.hypothesis_of("A", n)[0] == "A1")
+    assert len(trials) == n_dir + n_a4
     assert all(json.loads(t.notes)["gate"].split(":")[0] in ("pass", "fail") for t in trials)
+    # ADR 0002 item 5: every v2 trial carries the features version and its registered sign
+    assert all(t.params["features_version"] == FEATURES_VERSION for t in trials)
+    for t in trials:
+        if t.hypothesis == "A4":
+            assert t.params["label"] == "vol_surprise_partial"
+            assert t.params["expected_sign"] == pl._a4_sign(t.params["feature"])
+            assert "placebo_t" in json.loads(t.notes)
+        else:
+            assert t.params["expected_sign"] == pl.hypothesis_of("A", t.params["feature"])[1]
+        if "_sm5_z." in t.params["feature"]:
+            assert t.params["horizon"] in (5, 20)
     # re-running the same study is not a new trial
     pl.signal_study(cfg, store, "A", clock, _silent)
     assert len(store.read_trials("A", "signal")) == len(trials)
 
     for name in ["events.tone.mean_z.60", "events.n_events.share_z.60"]:
-        assert pl.backtest(cfg, store, "A", clock, feature=name, horizon=5, echo=_silent) == pl.OK
+        # H0 has no registered sign: the backtest refuses to pick one, an explicit one runs.
+        assert pl.backtest(cfg, store, "A", clock, feature=name, horizon=5,
+                           echo=_silent) == pl.REFUSED
+        assert pl.backtest(cfg, store, "A", clock, feature=name, sign=1.0, horizon=5,
+                           echo=_silent) == pl.OK
     bt = store.read_trials("A", "backtest")
     assert len(bt) == 2 and all(t.stats is not None for t in bt)
     rets = store.read_trial_returns([t.trial_id for t in bt])
     assert rets.index.max() < pd.Timestamp(cfg.holdout_start)
     assert pl.overfit_report(cfg, store, "A", _silent) == pl.OK
+
+
+# ADR 0002 item 5: v1 trials (experiment 0003) are neither re-logged nor overwritten; the same
+# feature x horizon under v2 is a new row.
+def test_signal_study_keeps_v1_trials_and_adds_v2_rows(cfg, store):
+    _synthetic(store)
+    pl.build_dataset(cfg, store, "A", _silent)
+    name = "events.root_19_fight/n_events.sum_share_lr.60"
+    v1 = [_v1_signal_trial(name, 1), _v1_signal_trial(name, 5, label="realized_vol")]
+    for t in v1:
+        store.add_trial(t)
+    pl.signal_study(cfg, store, "A", lambda: NOW, _silent)
+    after = store.read_trials("A", "signal")
+    ids = [t.trial_id for t in after]
+    assert len(ids) == len(set(ids))
+    old = [t for t in after if "features_version" not in t.params]
+    assert sorted(t.trial_id for t in old) == sorted(t.trial_id for t in v1)
+    assert [json.loads(t.notes)["gate"] for t in old] == ["pass: v1", "pass: v1"]
+    v2 = [t for t in after if t.params.get("feature") == name
+          and t.params.get("features_version") == FEATURES_VERSION]
+    assert {(t.params["label"], t.params["horizon"]) for t in v2} == {
+        *(("ret_oo", h) for h in cfg.horizons), *(("vol_surprise_partial", h) for h in cfg.horizons)}
+    assert not {t.trial_id for t in v2} & {t.trial_id for t in v1}
+
+
+# Experiment 0003 bug 2: signal_study discarded the sign from hypothesis_of, so a wrong-signed
+# A1 feature could pass. Each direction trial must reach the gate with its registered sign.
+def test_signal_study_passes_registered_sign_to_gate(cfg, store, monkeypatch):
+    _synthetic(store)
+    pl.build_dataset(cfg, store, "A", _silent)
+    seen: dict[str, set] = {}
+    real = pl.evaluate.passes_gate
+
+    def spy(rep, subs, cost, *, expected_sign):
+        seen.setdefault(rep.feature, set()).add(expected_sign)
+        return real(rep, subs, cost, expected_sign=expected_sign)
+
+    monkeypatch.setattr(pl.evaluate, "passes_gate", spy)
+    pl.signal_study(cfg, store, "A", lambda: NOW, _silent)
+    assert seen["events.tone.mean_z.60"] == {None}  # H0: either sign
+    assert seen["events.root_19_fight/n_events.sum_share_z.60"] == {-1.0}
+    assert seen["events.goldstein.mean_z.60"] == {1.0}
+    assert seen["events.tone.mean5d_z.60"] == {1.0}
+
+
+def test_signal_study_refuses_features_built_before_v2(cfg, store, tmp_path):
+    # The store has no features version; a v1 build (no sm5 names) must not be logged as v2.
+    _synthetic(store)
+    pl.build_dataset(cfg, store, "A", _silent)
+    feats = store.read_features(None, None)
+    old = SqliteStore(tmp_path / "v1.sqlite")
+    old.init()
+    old.upsert_assets(store.read_assets("A"))
+    old.replace_features(feats[~feats["feature"].str.contains("_sm5_z.", regex=False)])
+    old.replace_labels(store.read_labels(None, None))
+    out: list[str] = []
+    assert pl.signal_study(cfg, old, "A", lambda: NOW, out.append) == pl.MISSING
+    assert old.read_trials("A", "signal") == [] and "build-dataset" in out[-1]
 
 
 def test_model_backtest_walk_forward(cfg, store, monkeypatch):
@@ -382,14 +518,28 @@ def test_weights_need_a_bar_on_the_score_date():
 # --- gate 3 deflates over every logged trial of the track --------------------------------------
 # Review regression: N counted backtest columns only, ignoring the signal trials that chose them.
 
+def _v1_signal_trial(feature: str, horizon: int, label: str = "ret_oo") -> Trial:
+    """A trial as experiment 0003 logged it: v1 params, no features_version, no sign."""
+    params = {"feature": feature, "horizon": horizon, "label": label}
+    d0, d1 = date(2023, 1, 2), date(2024, 3, 29)
+    return Trial(trial_id=pl.trial_id("signal", "A", params, d0, d1), created_at=NOW, track="A",
+                 stage="signal", hypothesis="A1", params=params, data_start=d0, data_end=d1,
+                 notes=json.dumps({"gate": "pass: v1"}))
+
+
 def test_overfit_report_counts_all_stages(cfg, store, monkeypatch):
     _synthetic(store)
     pl.build_dataset(cfg, store, "A", _silent)
     clock = lambda: NOW
+    # ADR 0002 item 5: the v1 trials stay in N next to the v2 ones
+    v1 = [_v1_signal_trial("events.root_19_fight/n_events.sum_share_lr.60", h) for h in (1, 5)]
+    for t in v1:
+        store.add_trial(t)
     pl.signal_study(cfg, store, "A", clock, _silent)
     for name in ["events.tone.mean_z.60", "events.n_events.share_z.60"]:
-        pl.backtest(cfg, store, "A", clock, feature=name, horizon=5, echo=_silent)
+        pl.backtest(cfg, store, "A", clock, feature=name, sign=1.0, horizon=5, echo=_silent)
     n_all = len(store.read_trials("A"))
+    assert {t.trial_id for t in v1} <= {t.trial_id for t in store.read_trials("A")}
     bt = store.read_trials("A", "backtest")
     assert n_all > len(bt) == 2
     seen = {}
@@ -404,6 +554,41 @@ def test_overfit_report_counts_all_stages(cfg, store, monkeypatch):
     assert pl.overfit_report(cfg, store, "A", out.append) == pl.OK
     assert seen == {"n_trials": n_all, "cols": 2}
     assert any(f"over {n_all} logged trials" in line for line in out)
+
+
+# ADR 0002 item 5, review regression: backtest params had no features_version, so a v2 backtest
+# hashed to the same trial id as the same v1 backtest and was reported "identical trial already
+# logged" instead of being logged.
+def test_backtest_params_carry_features_version(cfg, store, monkeypatch, tmp_path):
+    monkeypatch.setattr(pl, "_WF_TRAIN_DAYS", 100)
+    monkeypatch.setattr(pl, "_WF_TEST_DAYS", 40)
+    clock = lambda: NOW
+    name = "events.n_events.share_z.60"
+    _synthetic(store)
+    pl.build_dataset(cfg, store, "A", _silent)
+    assert pl.backtest(cfg, store, "A", clock, feature=name, sign=1.0, horizon=5,
+                       echo=_silent) == pl.OK
+    pl.backtest(cfg, store, "A", clock, model="ridge", model_features=[name], horizon=5,
+                echo=_silent)
+    bt = store.read_trials("A", "backtest")
+    assert {t.params["kind"] for t in bt} == {"rule", "model"}
+    assert all(t.params["features_version"] == FEATURES_VERSION for t in bt)
+
+    # The same rule backtest as v1 logged it (no features_version) does not block the v2 row.
+    (rule,) = [t for t in bt if t.params["kind"] == "rule"]
+    v1_params = {k: v for k, v in rule.params.items() if k != "features_version"}
+    v1_id = pl.trial_id("backtest", "A", v1_params, rule.data_start, rule.data_end)
+    other = SqliteStore(tmp_path / "with_v1.sqlite")
+    other.init()
+    _synthetic(other)
+    pl.build_dataset(cfg, other, "A", _silent)
+    other.add_trial(Trial(trial_id=v1_id, created_at=NOW, track="A", stage="backtest",
+                          hypothesis="H0", params=v1_params, data_start=rule.data_start,
+                          data_end=rule.data_end, notes="{}"))
+    assert pl.backtest(cfg, other, "A", clock, feature=name, sign=1.0, horizon=5,
+                       echo=_silent) == pl.OK
+    ids = {t.trial_id for t in other.read_trials("A", "backtest")}
+    assert ids == {v1_id, rule.trial_id} and v1_id != rule.trial_id
 
 
 def test_backtest_needs_exactly_one_of_feature_or_model(cfg, store):

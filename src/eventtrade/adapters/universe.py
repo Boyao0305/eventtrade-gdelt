@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import csv
 import io
+import re
+import unicodedata
 from collections.abc import Callable
 from datetime import date
 from importlib import resources
@@ -26,6 +28,11 @@ _INDEX_URLS = {
 # Live counts are ~503 and ~400; anything far below means the page layout changed.
 _MIN_MEMBERS = {"sp500": 480, "sp400": 380}
 _USER_AGENT = "eventtrade-research/0.1 (index membership; contact via repo owner)"
+# One listing per company (ADR 0002): share classes get identical GKG features (experiment 0003)
+# and would double-count the company in a cross-section. Keep the class listed here, else the
+# alphabetically first ticker. Class A: voting shares and the longer listing history.
+_PREFERRED_SHARE_CLASS = frozenset({"GOOGL", "FOXA", "NWSA"})
+_CLASS_MARKER = re.compile(r"\(?\s*\bclass\s+[a-z]\b\s*\)?", re.IGNORECASE)
 
 
 def load_etf_universe() -> list[Asset]:
@@ -45,7 +52,7 @@ def fetch_index_members(
         raise ValueError(f"unknown index {index!r}; expected one of {sorted(_INDEX_URLS)}")
     resp = get(_INDEX_URLS[index], timeout=timeout, headers={"User-Agent": _USER_AGENT})
     resp.raise_for_status()
-    assets = _parse_index_html(resp.text, index)
+    assets = _one_share_class(_parse_index_html(resp.text, index))
     if len(assets) < _MIN_MEMBERS[index]:
         raise ValueError(f"{index}: parsed only {len(assets)} members; Wikipedia layout changed?")
     return assets
@@ -88,3 +95,19 @@ def _parse_index_html(html: str, index: str) -> list[Asset]:
         seen.setdefault(ticker, Asset(ticker=ticker, name=str(name).strip(), kind="stock",
                                       track="B", group=index))
     return sorted(seen.values(), key=lambda a: a.ticker)
+
+
+def _one_share_class(assets: list[Asset]) -> list[Asset]:
+    """One Asset per company (same name modulo class marker), sorted by ticker."""
+    by_company: dict[str, list[Asset]] = {}
+    for a in assets:
+        by_company.setdefault(_company_key(a.name), []).append(a)
+    kept = [min(group, key=lambda a: (a.ticker not in _PREFERRED_SHARE_CLASS, a.ticker))
+            for group in by_company.values()]
+    return sorted(kept, key=lambda a: a.ticker)
+
+
+def _company_key(name: str) -> str:
+    """'Alphabet Inc. (Class C)' -> 'alphabet inc': class marker and punctuation removed."""
+    s = _CLASS_MARKER.sub(" ", unicodedata.normalize("NFKC", name)).lower()
+    return " ".join(re.sub(r"[^\w]+", " ", s).split())

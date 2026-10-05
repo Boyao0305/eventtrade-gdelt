@@ -62,28 +62,90 @@ REAGG_ROWS = [(D(2024, 7, 6), 3.0, 2), (D(2024, 7, 7), -1.0, 1), (D(2024, 7, 8),
 REAGG_EXPECTED = (D(2024, 7, 8), 6.0, 7, 6.0 / 7.0)
 REAGG_WRONG_MEAN_OF_MEANS = (1.5 - 1.0 + 1.0) / 3
 
-# --- Surprise baseline excludes day t -----------------------------------------------------------
+# --- Surprise baseline excludes day t (feature definitions v2, ADR 0002 item 1) -----------------
 # z_t = (x_t - mean(x[t-shift-window+1 .. t-shift])) / std(same, ddof=1); fewer than min_periods
-# baseline values -> NaN; zero baseline std -> NaN. lr_t = ln(x_t / baseline mean), NaN unless
-# both are positive.
+# baseline values -> NaN; baseline std below 1e-9 -> NaN; z clipped to +-10.
+# lr_t = ln((x_t + 1) / (baseline mean + 1)) with pseudo-count 1 (default k): defined on zero days.
 # (values, window, min_periods, shift, expected z per row, expected lr per row)
 SURPRISE_CASES = [
     # baseline [1,2,3]: mean 2, std 1 -> z = 8; with day t included it would be ~1.5
-    ([1.0, 2.0, 3.0, 10.0], 3, 3, 1, [nan, nan, nan, 8.0], [nan, nan, nan, log(5.0)]),
+    ([1.0, 2.0, 3.0, 10.0], 3, 3, 1, [nan, nan, nan, 8.0], [nan, nan, nan, log(11.0 / 3.0)]),
     # rolling: row 4's baseline is [2,3,10] (row 0 dropped)
     ([1.0, 2.0, 3.0, 10.0, 5.0], 3, 3, 1,
-     [nan, nan, nan, 8.0, (5.0 - 5.0) / sqrt(19.0)], [nan, nan, nan, log(5.0), 0.0]),
+     [nan, nan, nan, 8.0, (5.0 - 5.0) / sqrt(19.0)], [nan, nan, nan, log(11.0 / 3.0), 0.0]),
     # min_periods 2 lets row 2 through on baseline [1,2]
-    ([1.0, 2.0, 4.0], 3, 2, 1, [nan, nan, (4.0 - 1.5) / sqrt(0.5)], [nan, nan, log(4.0 / 1.5)]),
+    ([1.0, 2.0, 4.0], 3, 2, 1, [nan, nan, (4.0 - 1.5) / sqrt(0.5)], [nan, nan, log(5.0 / 2.5)]),
     # constant baseline -> std 0 -> z NaN; lr still defined
-    ([2.0, 2.0, 2.0, 4.0], 3, 3, 1, [nan, nan, nan, nan], [nan, nan, nan, log(2.0)]),
+    ([2.0, 2.0, 2.0, 4.0], 3, 3, 1, [nan, nan, nan, nan], [nan, nan, nan, log(5.0 / 3.0)]),
     # shift 2 (e.g. 2-day sums): baseline for row 3 is rows 0..1 only
     ([1.0, 3.0, 100.0, 4.0], 2, 2, 2, [nan, nan, nan, (4.0 - 2.0) / sqrt(2.0)],
-     [nan, nan, nan, log(2.0)]),
-    # zero values: z fine, lr NaN
+     [nan, nan, nan, log(5.0 / 3.0)]),
+    # row 2: first event after an all-zero baseline -> lr ln 2 (v1: NaN, m = 0);
+    # row 3: zero value on a non-zero baseline -> lr finite and negative (v1: NaN, x = 0)
     ([0.0, 0.0, 1.0, 0.0], 2, 2, 1, [nan, nan, nan, (0.0 - 0.5) / sqrt(0.5)],
-     [nan, nan, nan, nan]),
+     [nan, nan, log(2.0), log(1.0 / 1.5)]),
+    # zero day on an all-zero baseline: z NaN (no variance), lr = ln(1/1) = 0 (v1: NaN)
+    ([0.0, 0.0, 0.0, 0.0], 3, 3, 1, [nan, nan, nan, nan], [nan, nan, nan, 0.0]),
+    # clip: raw z = 98 -> +10, raw z = -11 -> -10
+    ([1.0, 2.0, 3.0, 100.0], 3, 3, 1, [nan, nan, nan, 10.0], [nan, nan, nan, log(101.0 / 3.0)]),
+    ([10.0, 11.0, 12.0, 0.0], 3, 3, 1, [nan, nan, nan, -10.0], [nan, nan, nan, log(1.0 / 12.0)]),
+    # std floor: baseline [0, 1e-10, 0] has std 5.8e-11 < 1e-9 -> z NaN (v1: z = 1.15)
+    ([0.0, 1e-10, 0.0, 1e-10], 3, 3, 1, [nan, nan, nan, nan],
+     [nan, nan, nan, log((1.0 + 1e-10) / (1.0 + 1e-10 / 3.0))]),
 ]
+
+# --- Regression inputs from experiment 0003 ----------------------------------------------------
+# Bug 4, EPHE-like: a share series with some history, then an all-zero 60-day window, then a
+# small spike. Pandas' rolling std leaves residue (~1e-10) on the all-zero window, so v1's
+# `s > 0` guard let z reach ~1.9e7 (EPHE massviolence 2022-10-13: 1.31e7). v2: z is NaN there and
+# |z| <= 10 everywhere. Head = np.random.default_rng(EPHE_SEED).random(40) * 0.01.
+EPHE_SEED = 1
+EPHE_HEAD_LEN, EPHE_ZEROS, EPHE_SPIKE = 40, 60, 0.002
+EPHE_WINDOW, EPHE_MIN_PERIODS = 60, 20
+
+# Bug 3, quiet-then-spike: a sparse count that appeared once, then 60 zero days, then a spike.
+# v1 lr = ln(x / m) is NaN because m = 0 (the first event after a quiet window was dropped).
+# v2 lr = ln((40 + 1) / (0 + 1)) = ln 41, finite and large; z is NaN (all-zero baseline).
+SPIKE_FIRST, SPIKE_ZEROS, SPIKE_VALUE = 3.0, 60, 40.0
+SPIKE_WINDOW, SPIKE_MIN_PERIODS = 60, 20
+SPIKE_LR = log(SPIKE_VALUE + 1.0)
+
+# Bugs 5 and 6, MSFT-like GKG org attention. org_docs rows: value_sum = docs mentioning the alias,
+# n = ALL GKG docs that session day (the same on every row of the day).
+# Day 0 (Mon 2024-07-01): MSFT hits three aliases; another org is also present.
+# Day 1 (Tue 2024-07-02): no MSFT alias row (zero mentions); the day's total is known from "apple".
+# Sat 2024-07-06 + Sun 2024-07-07 + Mon 2024-07-08 roll into Monday: MSFT only on Sat and Mon,
+# "apple" only on Sun, so Monday's denominator must be the sum of all three day totals.
+# rows: (session_date, entity, docs, day_total_docs)
+MSFT_ALIASES = ["microsoft", "microsoft corp", "microsoft corporation"]
+MSFT_ORG_ROWS = [
+    (D(2024, 7, 1), "microsoft", 120.0, 400_000), (D(2024, 7, 1), "microsoft corp", 30.0, 400_000),
+    (D(2024, 7, 1), "microsoft corporation", 10.0, 400_000),
+    (D(2024, 7, 1), "apple", 5.0, 400_000),
+    (D(2024, 7, 2), "apple", 7.0, 350_000),
+    (D(2024, 7, 6), "microsoft", 4.0, 100_000),
+    (D(2024, 7, 7), "apple", 2.0, 90_000),
+    (D(2024, 7, 8), "microsoft corp", 6.0, 410_000),
+]
+MSFT_DAYS = [D(2024, 7, 1), D(2024, 7, 2), D(2024, 7, 3), D(2024, 7, 5), D(2024, 7, 8)]
+# expected gkg.org_docs.mean (attention share) for MSFT on MSFT_DAYS:
+# d0: (120+30+10) / 400k, v1 gave 160 / (3 * 400k); d1: 0 (no mention = 0), v1 gave NaN;
+# 07-03 and 07-05: no GKG rows at all -> unobserved -> NaN; 07-08: (4+6) / (100k+90k+410k).
+MSFT_SHARE = [160.0 / 400_000, 0.0, nan, nan, 10.0 / 600_000]
+MSFT_SHARE_V1_DAY0 = 160.0 / 1_200_000
+# org_tone rows for the same two days: tone mean stays NaN on the zero day.
+# (session_date, entity, tone_sum, docs)
+MSFT_TONE_ROWS = [(D(2024, 7, 1), "microsoft", -12.0, 120), (D(2024, 7, 1), "microsoft corp", 3.0, 30),
+                  (D(2024, 7, 2), "apple", 1.0, 7)]
+MSFT_TONE = [-9.0 / 150.0, nan]
+
+# --- sm5: 5-row trailing mean of the v2 z feature, rows t-4..t, all five required -------------
+# Baseline window 2: x alternates 0, 2 so every baseline is {0, 2}: mean 1, std sqrt 2, and
+# z alternates -c, +c from row 2 (c = 1/sqrt 2). sm5 exists from row 6 = mean of rows 2..6.
+_C = 1.0 / sqrt(2.0)
+SM5_VALUES = [0.0, 2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0, 0.0]
+SM5_WINDOW, SM5_MIN_PERIODS = 2, 2
+SM5_EXPECTED = [nan] * 6 + [-_C / 5.0, _C / 5.0, -_C / 5.0]
 
 # --- Statistics per (date, entity), with share normalised by the same-day _GLOBAL total ----------
 # mean = value_sum/n (NaN when n = 0); share = n / n(_GLOBAL); count-like stats are 0 on an

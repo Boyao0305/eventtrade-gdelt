@@ -65,6 +65,7 @@ class Store(Protocol):
     def read_prices(self, tickers: Sequence[str] | None, start: date | None,
                     end: date | None) -> pd.DataFrame: ...
     def upsert_assets(self, assets: Iterable[Asset]) -> int: ...
+    def delete_assets(self, tickers: Sequence[str]) -> int: ...
     def read_assets(self, track: str | None = None) -> list[Asset]: ...
     def replace_features(self, df: pd.DataFrame) -> int: ...
     def read_features(self, start: date | None, end: date | None,
@@ -96,36 +97,48 @@ FetchIndex = Callable[[str], list[Asset]]
 LoadEtfs = Callable[[], list[Asset]]
 
 
-# --- Pre-registered feature families (ADR 0001) -----------------------------------------------
+# --- Pre-registered feature families (ADR 0001, amended by ADR 0002) ---------------------------
 
 @dataclass(frozen=True)
 class _Family:
     hypothesis: str
     spec: MetricSpec
-    sign: float  # pre-registered expected sign; backtests trade this direction by default
+    # Pre-registered expected IC sign. None = no sign (H0): gate 1 accepts either (ADR 0002 item
+    # 3), and a backtest needs an explicit --sign. Backtests trade this direction by default.
+    sign: float | None
 
 
 _A1_ROOTS = ("root_14_protest", "root_17_coerce", "root_18_assault", "root_19_fight",
              "root_20_massviolence")
 
+# ADR 0002 item 1: every z family also gets the low-turnover `sm5` transform (5-day mean of z),
+# evaluated at h = 5 and 20 only (`_SM5_HORIZONS`).
 _FAMILIES: dict[str, list[_Family]] = {
     "A": [
-        _Family("H0", MetricSpec("events", "tone", "mean", ("z",)), 1.0),
-        _Family("H0", MetricSpec("events", "n_events", "share", ("z",)), 1.0),
-        *(_Family("A1", MetricSpec("events", r, "sum_share", ("z", "lr"),
+        _Family("H0", MetricSpec("events", "tone", "mean", ("z", "sm5")), None),
+        _Family("H0", MetricSpec("events", "n_events", "share", ("z", "sm5")), None),
+        *(_Family("A1", MetricSpec("events", r, "sum_share", ("z", "lr", "sm5"),
                                    denominator_metric="n_events"), -1.0) for r in _A1_ROOTS),
-        _Family("A1", MetricSpec("events", "goldstein", "mean", ("z",)), 1.0),
-        _Family("A2", MetricSpec("gkg", "theme_docs", "mean", ("z",)), 1.0),
-        _Family("A2", MetricSpec("gkg", "theme_tone", "mean", ("z",)), 1.0),
-        _Family("A3", MetricSpec("events", "tone", "mean", ("z",), agg_days=5), 1.0),
+        _Family("A1", MetricSpec("events", "goldstein", "mean", ("z", "sm5")), 1.0),
+        _Family("A2", MetricSpec("gkg", "theme_docs", "mean", ("z", "sm5")), 1.0),
+        _Family("A2", MetricSpec("gkg", "theme_tone", "mean", ("z", "sm5")), 1.0),
+        _Family("A3", MetricSpec("events", "tone", "mean", ("z", "sm5"), agg_days=5), 1.0),
     ],
     "B": [
-        _Family("B1", MetricSpec("gkg", "org_docs", "mean", ("z",)), 1.0),
-        _Family("B1", MetricSpec("gkg", "org_tone", "mean", ("z", "level")), 1.0),
-        _Family("B2", MetricSpec("gkg", "org_neg_docs", "mean", ("z",)), -1.0),
-        _Family("B2", MetricSpec("gkg", "org_neg_docs", "sum", ("z", "lr")), -1.0),
+        _Family("B1", MetricSpec("gkg", "org_docs", "mean", ("z", "sm5")), 1.0),
+        _Family("B1", MetricSpec("gkg", "org_tone", "mean", ("z", "sm5", "level")), 1.0),
+        _Family("B2", MetricSpec("gkg", "org_neg_docs", "mean", ("z", "sm5")), -1.0),
+        _Family("B2", MetricSpec("gkg", "org_neg_docs", "sum", ("z", "lr", "sm5")), -1.0),
     ],
 }
+_SM5_HORIZONS = (5, 20)
+# A4 (ADR 0001/0002): event shocks raise future volatility, pre-registered sign positive in
+# *shock* units. A1 registers each feature's return sign for a shock (conflict counts -1,
+# Goldstein +1, since a shock is a LOW Goldstein), so a feature's shock orientation is minus its
+# A1 sign, and its expected A4 IC sign is _A4_SIGN * (-A1 sign): +1 for counts, -1 for Goldstein.
+_A4_SIGN = 1.0
+_A4_LABEL = "vol_surprise_partial"
+_A4_PLACEBO = "trailing_expanding_mean"
 # B1: attention surprise x tone level, built after the base features.
 _B1_PRODUCT = ("gkg.org_docs.mean_z.60", "gkg.org_tone.mean.0")
 _B1_PRODUCT_NAME = "gkg.org_docs.mean_z.60*gkg.org_tone.mean.0"
@@ -177,7 +190,12 @@ def load_universe(
     cfg: Config, store: Store, track: Track | None, load_etfs: LoadEtfs, fetch_index: FetchIndex,
     echo: Echo = print,
 ) -> int:
-    """Write the Track A ETF list and/or Track B index members (with GKG org aliases) to assets."""
+    """Write the Track A ETF list and/or Track B index members (with GKG org aliases) to assets.
+
+    A reloaded track is replaced, not merged: its stored tickers missing from the new list are
+    deleted (e.g. the GOOG/FOX/NWS second share classes dropped by ADR 0002 item 2), so they
+    stop entering features, panels and backtests. Their prices and trials are kept.
+    """
     assets: list[Asset] = []
     if track in (None, "A"):
         etfs = load_etfs()
@@ -196,6 +214,13 @@ def load_universe(
         assets += with_aliases
     n = store.upsert_assets(assets)
     echo(f"upserted {n} assets")
+    loaded = {a.ticker for a in assets}
+    stale = sorted(a.ticker for t in (("A", "B") if track is None else (track,))
+                   for a in store.read_assets(t) if a.ticker not in loaded)
+    if stale:
+        store.delete_assets(stale)
+        shown = ", ".join(stale[:10]) + (", ..." if len(stale) > 10 else "")
+        echo(f"removed {len(stale)} stale assets no longer in the universe: {shown}")
     return OK
 
 
@@ -408,22 +433,53 @@ def _track_features(
     return out
 
 
-def hypothesis_of(track: Track, feature: str) -> tuple[str, float]:
-    """Pre-registered hypothesis id and expected sign of a feature name ('?', +1 if unknown)."""
+def hypothesis_of(track: Track, feature: str) -> tuple[str, float | None]:
+    """Pre-registered hypothesis id and expected sign of a feature name.
+
+    The sign is None for H0 (no pre-registered sign) and for unknown names ('?').
+    """
+    fam = _family_of(track, feature)
+    if fam is None:
+        return "?", None
+    return fam[0].hypothesis, fam[0].sign
+
+
+def _family_of(track: Track, feature: str) -> tuple[_Family, str] | None:
+    """(family, transform) a stored feature name was built from; None if it is not registered."""
     if track == "B" and feature == _B1_PRODUCT_NAME:
-        return "B1", 1.0
+        return _Family("B1", MetricSpec("gkg", "org_docs", "mean"), 1.0), "product"
     for fam in _FAMILIES[track]:
-        s = fam.spec
-        names = {f"{s.column}_z.{s.window}", f"{s.column}_lr.{s.window}", f"{s.column}.0"}
-        if feature in names:
-            return fam.hypothesis, fam.sign
-    return "?", 1.0
+        for tr in fam.spec.transforms:
+            if feature == features.feature_name(fam.spec, tr):
+                return fam, tr
+    return None
+
+
+def _horizons_for(track: Track, feature: str, horizons: Sequence[int]) -> list[int]:
+    """Gate-1 horizons of a feature: sm5 (low-turnover) features only at h = 5 and 20."""
+    fam = _family_of(track, feature)
+    if fam is not None and fam[1] == "sm5":
+        return [h for h in horizons if h in _SM5_HORIZONS]
+    return list(horizons)
+
+
+def _a4_sign(feature: str) -> float | None:
+    """Expected A4 IC sign of an A1 feature (see `_A4_SIGN`); None if not an A1 feature."""
+    fam = _family_of("A", feature)
+    if fam is None or fam[0].hypothesis != "A1" or fam[0].sign is None:
+        return None
+    return _A4_SIGN * -fam[0].sign
 
 
 # --- signal study (gate 1) --------------------------------------------------------------------
 
 def signal_study(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print) -> int:
-    """Evaluate every stored feature x horizon of a track, log each as a 'signal' trial, print gates."""
+    """Evaluate every stored feature x horizon of a track, log each as a 'signal' trial, print gates.
+
+    Trial params carry `features_version` and the pre-registered sign (ADR 0002 item 5), so v2
+    trials are new rows next to the v1 ones (which have no `features_version`) and nothing is
+    re-logged; overfit_report's N counts both.
+    """
     assets = store.read_assets(track)
     tickers = {a.ticker for a in assets}
     feats = _for_tickers(store.read_features(cfg.start, cfg.holdout_start), tickers)
@@ -431,21 +487,26 @@ def signal_study(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo
     if feats.empty or labs.empty:
         echo(f"no features/labels for track {track}: run `build-dataset --track {track}`")
         return MISSING
+    if not _has_current_features(track, feats):
+        echo(f"stored track {track} features predate features v{features.FEATURES_VERSION}"
+             f" (no sm5 feature): run `build-dataset --track {track}` first; nothing logged")
+        return MISSING
     cost = cfg.cost_bps_etf if track == "A" else cfg.cost_bps_stock
     logged = {t.trial_id for t in store.read_trials(track, "signal")}
-    horizons = list(cfg.horizons)
     d0, d1 = feats["date"].min().date(), feats["date"].max().date()
     n_pass = 0
     echo(f"{'feature':<52}{'h':>3}{'ic_mean':>9}{'nw_t':>7}  gate")
     for name, sub in feats.groupby("feature", sort=True):
-        hyp, _ = hypothesis_of(track, str(name))
-        for h in horizons:
-            params = {"feature": str(name), "horizon": h, "label": "ret_oo"}
+        hyp, sign = hypothesis_of(track, str(name))
+        hs = _horizons_for(track, str(name), cfg.horizons)
+        for h in hs:
+            params = {"feature": str(name), "horizon": h, "label": "ret_oo",
+                      "features_version": features.FEATURES_VERSION, "expected_sign": sign}
             try:
-                rep = evaluate.evaluate_signal(
-                    sub, labs, str(name), [h, *[x for x in horizons if x != h]], track)
+                rep = evaluate.evaluate_signal(sub, labs, str(name), [h, *[x for x in hs if x != h]],
+                                               track)
                 subs = evaluate.subperiod_signs(evaluate.daily_ic(sub, labs, h))
-                ok, reason = evaluate.passes_gate(rep, subs, cost)
+                ok, reason = evaluate.passes_gate(rep, subs, cost, expected_sign=sign)
                 note = {"gate": reason, "subperiod_ic": subs, "report": rep.model_dump()}
                 line = f"{rep.ic_mean:>9.4f}{rep.ic_t:>7.2f}"
             except ValueError as e:
@@ -461,36 +522,47 @@ def signal_study(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo
     return OK
 
 
+def _has_current_features(track: Track, feats: pd.DataFrame) -> bool:
+    """True if the store holds at least one sm5 feature (new in features v2) for the track.
+
+    The store does not record the features version, so this is the available proxy: a v1
+    build has no sm5 names, and logging its rows under `features_version: 2` would be wrong.
+    """
+    sm5 = {features.feature_name(f.spec, "sm5") for f in _FAMILIES[track]
+           if "sm5" in f.spec.transforms}
+    return bool(sm5 & set(feats["feature"].unique()))
+
+
 def _signal_study_vol(
     cfg: Config, store: Store, feats: pd.DataFrame, tickers: set[str], d0: date, d1: date,
     logged: set[str], now: Clock, echo: Echo,
 ) -> int:
-    """A4: event-shock features vs future realised volatility (IC t and sub-period sign only)."""
+    """A4 (ADR 0002 item 4): A1 event-shock features vs the vol surprise, partial IC + placebo.
+
+    Label ln(fwd vol over h / trailing 22d vol); feature and label residualised per day on
+    ln rv5, ln rv22, ln rv60 and ln long-run vol; the trailing-mean placebo must not pass.
+    """
     prices = store.read_prices(sorted(tickers), cfg.start, cfg.holdout_start)
     if prices.empty:
         return 0
     tdays = _trading_days(prices)
-    a1 = [n for n in feats["feature"].unique() if hypothesis_of("A", str(n))[0] == "A1"]
+    controls = labels.vol_controls(prices, tdays)
+    a1 = sorted(str(n) for n in feats["feature"].unique() if _a4_sign(str(n)) is not None)
     n_pass = 0
     for h in cfg.horizons:
-        # VOL_LABEL_COLUMNS' `value` would collide with the feature's `value` in the IC join.
-        vol = labels.realized_vol_label(prices, h, tdays).rename(columns={"value": "vol"})
-        for name in sorted(a1):
-            ic = evaluate.daily_ic(feats[feats["feature"] == name], vol, h, label_col="vol")
-            t = evaluate.newey_west_t(ic, horizon=h)
-            subs = evaluate.subperiod_signs(ic)
-            sign = 1.0 if t > 0 else -1.0
-            held = sum(1 for m in subs if math.isfinite(m) and m * sign > 0)
-            ok = math.isfinite(t) and abs(t) >= evaluate.GATE_MIN_ABS_T and held >= 2
-            reason = (f"{'pass' if ok else 'fail'}: NW t={t:.2f}, sign held {held}/3"
-                      " (vol target: no spread condition)")
-            n_pass += ok
-            mean = float(ic.mean()) if len(ic) else float("nan")
-            echo(f"{'[A4 vol] ' + str(name):<52}{h:>3}{mean:>9.4f}{t:>7.2f}  {reason}")
-            params = {"feature": str(name), "horizon": h, "label": "realized_vol"}
-            note = {"gate": reason, "subperiod_ic": subs, "ic_mean": mean, "ic_t": t,
-                    "n_days": len(ic)}
-            _log_trial(store, logged, "A", "signal", "A4", params, d0, d1, now, note)
+        label = labels.vol_surprise_label(prices, h, tdays)
+        for name in a1:
+            if h not in _horizons_for("A", name, cfg.horizons):
+                continue
+            sign = _a4_sign(name)
+            res = evaluate.vol_gate(feats[feats["feature"] == name], label, controls, h,
+                                    expected_sign=sign)
+            n_pass += res.ok
+            echo(f"{'[A4 vol] ' + name:<52}{h:>3}{res.ic_mean:>9.4f}{res.ic_t:>7.2f}  {res.reason}")
+            params = {"feature": name, "horizon": h, "label": _A4_LABEL,
+                      "controls": list(labels.VOL_CONTROL_NAMES), "placebo": _A4_PLACEBO,
+                      "features_version": features.FEATURES_VERSION, "expected_sign": sign}
+            _log_trial(store, logged, "A", "signal", "A4", params, d0, d1, now, res.notes())
     return n_pass
 
 
@@ -516,6 +588,11 @@ def backtest(
     if feature is not None:
         hyp, reg_sign = hypothesis_of(track, feature)
         sign = reg_sign if sign is None else sign
+        if sign is None:
+            # H0 (and unknown names) have no pre-registered direction; taking it from the
+            # dev-period IC would be a choice made after seeing the data (ADR 0002 item 3).
+            echo(f"{feature!r} ({hyp}) has no pre-registered sign: pass --sign +1 or -1")
+            return REFUSED
         fs = _for_tickers(store.read_features(cfg.start, cfg.holdout_start, [feature]), tickers)
         if fs.empty:
             echo(f"feature {feature!r} not stored for track {track}")
@@ -549,7 +626,10 @@ def backtest(
                   "model_params": _DEFAULT_MODEL_PARAMS[model], "cv": "walk_forward",
                   "train_days": _WF_TRAIN_DAYS, "test_days": _WF_TEST_DAYS}
         notes = {"features_per_fold": chosen}
-    params |= {"horizon": horizon, "rebalance": rebalance, "weights": "rank_long_short"}
+    # ADR 0002 item 5: the features version is part of the trial id, so a backtest over v2
+    # features is a new row next to the same backtest over v1 features.
+    params |= {"horizon": horizon, "rebalance": rebalance, "weights": "rank_long_short",
+               "features_version": features.FEATURES_VERSION}
     weights = _weights(scores, prices, rebalance)
     if weights.empty:
         echo("no tradable weight dates")
@@ -646,7 +726,8 @@ def overfit_report(cfg: Config, store: Store, track: Track, echo: Echo = print) 
 
     Returns exist only for backtest trials, so they form the matrix for V[SR], PSR and PBO; but
     N in E[max SR] counts every signal, model and backtest trial (ADR 0001 gate 3), because the
-    signal stage chose what got backtested. Hold-out trials are not counted.
+    signal stage chose what got backtested. Hold-out trials are not counted. Trials of every
+    features version count (ADR 0002 item 5: the v1 trials were evaluated, so they stay in N).
     """
     trials = store.read_trials(track, "backtest")
     if not trials:

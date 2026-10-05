@@ -312,6 +312,17 @@ class SqliteStore:
         )
         return self._executemany(sql, rows, len(rows))
 
+    def delete_assets(self, tickers: Sequence[str]) -> int:
+        """Remove assets by ticker (prices, features and trials are kept); returns rows deleted."""
+        if not tickers:
+            return 0
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM assets WHERE ticker IN (SELECT value FROM json_each(?))",
+                (json.dumps(list(tickers)),),
+            )
+            return cur.rowcount
+
     def read_assets(self, track: str | None = None) -> list[Asset]:
         """All assets (or one track's), ordered by ticker."""
         where, params = ([], []) if track is None else (["track = ?"], [track])

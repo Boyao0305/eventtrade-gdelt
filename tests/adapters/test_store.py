@@ -175,6 +175,16 @@ def test_assets_round_trip_and_track_filter(store: SqliteStore) -> None:
     assert store.read_assets("A")[0].name == "iShares Japan"
 
 
+def test_delete_assets_removes_only_named_tickers(store: SqliteStore) -> None:
+    a = Asset(ticker="GOOG", name="Alphabet Inc. (Class C)", kind="stock", track="B",
+              group="sp500")
+    b = a.model_copy(update={"ticker": "GOOGL", "name": "Alphabet Inc. (Class A)"})
+    store.upsert_assets([a, b])
+    assert store.delete_assets(["GOOG", "NOPE"]) == 1
+    assert [x.ticker for x in store.read_assets()] == ["GOOGL"]
+    assert store.delete_assets([]) == 0
+
+
 # --- features / labels: replace by feature name / horizon --------------------------------------
 
 def test_replace_features_only_replaces_named_features(store: SqliteStore) -> None:

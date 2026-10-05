@@ -14,21 +14,29 @@ Conventions pinned by tests/core/test_evaluate.py:
   h-day labels make the IC series MA(h-1), so the default long-run variance is the larger of
   Hansen-Hodrick (uniform, h-1 lags) and Bartlett (max(auto, 2h) lags); a null simulation in the
   tests pins its size.
-- Gate 1 trades the signal in the direction of its IC: a negative-IC feature passes when the
-  top-minus-bottom spread is sufficiently *negative*. Cost per holding period is
-  4 * cost_bps * min(1, horizon * daily_turnover): the spread is $1 long plus $1 short, and
-  replacing a fraction tau of both legs trades 4*tau of notional (cost_bps is one-way per unit
-  traded). The daily turnover is scaled to the horizon and capped at full replacement.
+- Gate 1 direction (ADR 0002 item 3): the observed IC sign must equal the pre-registered sign.
+  H0 has none (`expected_sign=None`): either sign, traded in the direction of its IC. The
+  sub-period and spread conditions are measured in that gate direction, so a feature registered
+  negative passes only when its top-minus-bottom spread is sufficiently *negative*.
+- Gate 1 cost (ADR 0002 item 3): 4 x one-way cost x turnover per holding period, i.e.
+  4 * cost_bps * min(1, horizon * daily_turnover). A $1 long + $1 short book trades four legs
+  when both sides are replaced; ADR 0001's "one-way" wording meant this per-leg rate. The daily
+  turnover is scaled to the horizon and capped at full replacement.
+- A4 volatility gate (ADR 0002 item 4, `vol_gate`): IC of the residuals of both feature and
+  label after a per-day cross-sectional OLS on the vol controls, with the same |NW t|, registered
+  sign (positive) and sub-period conditions and no spread condition. A placebo (each ticker's
+  trailing mean of the feature) runs alongside; if the placebo also passes, the feature fails.
 """
 
 import math
 from collections.abc import Sequence
-from typing import Literal
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
-from eventtrade.schemas import SignalReport, Track
+from eventtrade.schemas import FEATURE_COLUMNS, SignalReport, Track
 
 IcMethod = Literal["spearman", "pearson"]
 
@@ -219,7 +227,7 @@ def evaluate_signal(
         feature=feature_name,
         horizon=h0,
         track=track,
-        n_days=int(len(ic)),
+        n_days=len(ic),
         ic_mean=decay[h0],
         ic_std=float(ic.std(ddof=1)) if len(ic) > 1 else float("nan"),
         ic_t=newey_west_t(ic, nw_lags, h0),
@@ -230,31 +238,199 @@ def evaluate_signal(
     )
 
 
-def passes_gate(report: SignalReport, subperiod_ic_means: Sequence[float], cost_bps: float) -> tuple[bool, str]:
-    """ADR 0001 gate 1: |NW t| >= 3, sign held in >= 2 of 3 sub-periods, directional spread > costs."""
+def passes_gate(
+    report: SignalReport, subperiod_ic_means: Sequence[float], cost_bps: float, *,
+    expected_sign: float | None,
+) -> tuple[bool, str]:
+    """Gate 1 (ADR 0001, amended by ADR 0002 item 3).
+
+    Pass = |NW t| >= 3, the observed IC sign equals `expected_sign` (the pre-registered sign;
+    None = H0, either sign), the gate direction held in >= 2 of 3 sub-periods, and the spread in
+    the gate direction exceeds 4 x one-way cost x turnover (a $1 long + $1 short book trades four
+    legs). `expected_sign` is keyword-only and required: forgetting it must not silently fall back
+    to taking the sign from the data.
+    """
+    expected = _check_sign(expected_sign)
     t = report.ic_t
     if math.isnan(t):
         return False, "fail: NW t is undefined"
-    reasons: list[str] = []
-    if abs(t) < GATE_MIN_ABS_T:
-        reasons.append(f"|NW t|={abs(t):.2f} < {GATE_MIN_ABS_T}")
-    sign = 1.0 if t > 0 else -1.0
-    n_sub = len(subperiod_ic_means)
-    needed = math.ceil(2 * n_sub / 3)
-    same = sum(1 for m in subperiod_ic_means if math.isfinite(m) and m * sign > 0)
-    if n_sub == 0 or same < needed:
-        reasons.append(f"sign held in {same}/{n_sub} sub-periods (< {needed})")
+    direction, same, n_sub, reasons = _ic_conditions(t, subperiod_ic_means, expected)
     period_turnover = min(1.0, report.horizon * report.turnover) if math.isfinite(report.turnover) else 1.0
-    # The spread is $1 long + $1 short; replacing a fraction tau of both legs trades 4*tau notional.
     cost = 4.0 * cost_bps * 1e-4 * period_turnover
-    net = sign * report.q_spread_mean - cost
+    net = direction * report.q_spread_mean - cost
     if not math.isfinite(net) or net <= 0:
         reasons.append(
-            f"directional spread {sign * report.q_spread_mean:.5f} - cost {cost:.5f} = {net:.5f} <= 0"
+            f"directional spread {direction * report.q_spread_mean:.5f} - cost {cost:.5f}"
+            f" = {net:.5f} <= 0"
         )
     if reasons:
         return False, "fail: " + "; ".join(reasons)
     return True, f"pass: NW t={t:.2f}, sign held {same}/{n_sub}, net spread {net:.5f}"
+
+
+def _check_sign(expected_sign: float | None) -> float | None:
+    if expected_sign is None:
+        return None
+    s = float(expected_sign)
+    if s not in (1.0, -1.0):
+        raise ValueError(f"expected_sign must be +1, -1 or None, got {expected_sign!r}")
+    return s
+
+
+def _ic_conditions(
+    t: float, subperiod_ic_means: Sequence[float], expected: float | None
+) -> tuple[float, int, int, list[str]]:
+    """IC leg shared by gate 1 and the A4 gate: (gate direction, sub-periods held, n, failures).
+
+    The gate direction is the pre-registered sign, or the observed sign of t when there is none.
+    """
+    reasons: list[str] = []
+    if abs(t) < GATE_MIN_ABS_T:
+        reasons.append(f"|NW t|={abs(t):.2f} < {GATE_MIN_ABS_T}")
+    observed = 1.0 if t > 0 else -1.0
+    direction = observed if expected is None else expected
+    if expected is not None and observed != expected:
+        reasons.append(f"observed IC sign {observed:+.0f} != pre-registered sign {expected:+.0f}")
+    n_sub = len(subperiod_ic_means)
+    needed = math.ceil(2 * n_sub / 3)
+    same = sum(1 for m in subperiod_ic_means if math.isfinite(m) and m * direction > 0)
+    if n_sub == 0 or same < needed:
+        reasons.append(f"sign held in {same}/{n_sub} sub-periods (< {needed})")
+    return direction, same, n_sub, reasons
+
+
+# --- A4 volatility gate (ADR 0002 item 4) -----------------------------------------------------
+
+def partial_ic(
+    feature: pd.DataFrame, label: pd.DataFrame, controls: pd.DataFrame, horizon: int,
+    min_names: int = 5, label_col: str = "value",
+) -> pd.Series:
+    """Daily Spearman IC of feature and label residuals after a per-day cross-sectional OLS.
+
+    `feature` is one feature (FEATURE_COLUMNS), `label` has `horizon` and `label_col`
+    (VOL_LABEL_COLUMNS by default), `controls` is date, ticker and one column per regressor. On
+    each date, rows with any NaN/inf are dropped; the date needs at least
+    max(min_names, n_regressors + 1 + 3) names. Both the feature and the label are regressed on
+    [1, controls] and the IC is the rank correlation of the two residual vectors. A residual that
+    is numerically zero (the side is an exact linear function of the controls) leaves the
+    correlation undefined and the date is skipped, as in `daily_ic`.
+    """
+    feat = _one_feature(feature)
+    lab = label.loc[label["horizon"] == horizon, ["date", "ticker", label_col]].rename(
+        columns={label_col: "label"})
+    ctl_cols = [c for c in controls.columns if c not in ("date", "ticker")]
+    df = (feat.merge(lab, on=["date", "ticker"], how="inner")
+          .merge(controls[["date", "ticker", *ctl_cols]], on=["date", "ticker"], how="inner"))
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=["value", "label", *ctl_cols])
+    df = _keep_dates_with(df.reset_index(drop=True), max(min_names, len(ctl_cols) + 4))
+    out: dict[Any, float] = {}
+    for d, g in df.groupby("date", sort=True):
+        X = np.column_stack([np.ones(len(g)), g[ctl_cols].to_numpy(dtype=float)])
+        rx = _ols_residual(X, g["value"].to_numpy(dtype=float))
+        ry = _ols_residual(X, g["label"].to_numpy(dtype=float))
+        if rx is None or ry is None:
+            continue
+        ic = _rank_corr(rx, ry)
+        if ic is not None:
+            out[d] = ic
+    s = pd.Series(out, dtype=float, name="ic")
+    s.index.name = "date"
+    return s.sort_index()
+
+
+def placebo_feature(feature: pd.DataFrame) -> pd.DataFrame:
+    """Static placebo: each ticker's mean of its own earlier feature values (expanding, to t-1).
+
+    Defined only where the feature itself is observed, so the placebo and the feature are tested
+    on the same rows. It carries the per-ticker level and none of the day-t news.
+    """
+    df = feature[["date", "ticker", "feature", "value"]].sort_values(["ticker", "date"],
+                                                                    ignore_index=True)
+    _one_feature(df)
+    v = df["value"].replace([np.inf, -np.inf], np.nan)
+    g = df["ticker"]
+    s = v.fillna(0.0).groupby(g).cumsum() - v.fillna(0.0)
+    n = v.notna().astype(float).groupby(g).cumsum() - v.notna().astype(float)
+    df["value"] = (s / n.where(n > 0)).where(v.notna())
+    return df[FEATURE_COLUMNS].sort_values(["date", "ticker"], ignore_index=True)
+
+
+@dataclass(frozen=True)
+class VolGateResult:
+    """Outcome of the A4 gate for one feature x horizon; `notes()` is what the trial logs."""
+
+    ok: bool
+    reason: str
+    n_days: int
+    ic_mean: float
+    ic_t: float
+    subperiod_ic: list[float] = field(default_factory=list)
+    placebo_ic_mean: float = float("nan")
+    placebo_t: float = float("nan")
+    placebo_subperiod_ic: list[float] = field(default_factory=list)
+    placebo_pass: bool = False
+
+    def notes(self) -> dict[str, Any]:
+        d = asdict(self)
+        d.pop("ok")
+        return {"gate": d.pop("reason"), **d}
+
+
+def vol_gate(
+    feature: pd.DataFrame, label: pd.DataFrame, controls: pd.DataFrame, horizon: int, *,
+    expected_sign: float = 1.0, min_names: int = 5,
+) -> VolGateResult:
+    """A4 gate: partial IC passes (|NW t| >= 3, registered sign, 2 of 3 sub-periods) AND the
+    trailing-mean placebo, put through the same test, does not pass."""
+    expected = _check_sign(expected_sign)
+    ic = partial_ic(feature, label, controls, horizon, min_names)
+    ok_f, t, subs, same, why = _vol_ic_leg(ic, horizon, expected)
+    pic = partial_ic(placebo_feature(feature), label, controls, horizon, min_names)
+    ok_p, pt, psubs, _, _ = _vol_ic_leg(pic, horizon, expected)
+    reasons = list(why)
+    if ok_p:
+        reasons.append(f"placebo (trailing per-ticker mean) also passes, NW t={pt:.2f}:"
+                       " the IC is a static per-ticker level")
+    ok = ok_f and not ok_p
+    reason = (f"pass: partial NW t={t:.2f}, sign held {same}/{len(subs)}; placebo NW t={pt:.2f}"
+              if ok else "fail: " + "; ".join(reasons))
+    return VolGateResult(
+        ok=ok, reason=reason, n_days=len(ic),
+        ic_mean=float(ic.mean()) if len(ic) else float("nan"), ic_t=t, subperiod_ic=subs,
+        placebo_ic_mean=float(pic.mean()) if len(pic) else float("nan"), placebo_t=pt,
+        placebo_subperiod_ic=psubs, placebo_pass=ok_p,
+    )
+
+
+def _vol_ic_leg(
+    ic: pd.Series, horizon: int, expected: float | None
+) -> tuple[bool, float, list[float], int, list[str]]:
+    t = newey_west_t(ic, horizon=horizon)
+    subs = subperiod_signs(ic)
+    if math.isnan(t):
+        return False, t, subs, 0, [f"partial NW t is undefined ({len(ic)} dates)"]
+    _, same, _, reasons = _ic_conditions(t, subs, expected)
+    return not reasons, t, subs, same, reasons
+
+
+def _ols_residual(X: np.ndarray, y: np.ndarray) -> np.ndarray | None:
+    """y minus its least-squares fit on X; None if the residual is numerically zero."""
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    r = y - X @ beta
+    scale = float(np.linalg.norm(y - y.mean()))
+    if scale == 0.0 or float(np.linalg.norm(r)) <= 1e-9 * scale:
+        return None
+    return r
+
+
+def _rank_corr(x: np.ndarray, y: np.ndarray) -> float | None:
+    rx = pd.Series(x).rank(method="average").to_numpy()
+    ry = pd.Series(y).rank(method="average").to_numpy()
+    rx, ry = rx - rx.mean(), ry - ry.mean()
+    den = math.sqrt(float(rx @ rx) * float(ry @ ry))
+    if den <= 0.0:
+        return None
+    return max(-1.0, min(1.0, float(rx @ ry) / den))
 
 
 # --- helpers ----------------------------------------------------------------------------------
