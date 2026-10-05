@@ -79,3 +79,28 @@ v1, v2 and screen trials.
 - *Trading the single best cell*: winner's curse; the combined, shrunk portfolio is the
   pre-registered object.
 - *h = 1*: dominated by costs (experiment 0003).
+
+## Implementation notes (2026-10-05, before any screen trial was logged)
+
+The v2 study was complete (null on both tracks) when these were settled; no screen cell had been
+evaluated. They resolve ambiguities in the text above; none was chosen by looking at screen data.
+
+- **Joint test statistics.** Directional: z = sign × t for signed cells, |t| for two-sided cells;
+  S = Σ max(z, 0)², M = max z. The track passes if min(p_S, p_M) < 0.025 (Bonferroni over the two
+  statistics, 5% overall). Stationary bootstrap mean block 40 days (2 × the longest horizon).
+- **Embargo.** Discovery labels must end by 2019-12-31 (the last h days of discovery drop out);
+  confirmation labels end before the hold-out start.
+- **Every cell counts.** A cell with too few names on most days keeps its place: p = NaN, it
+  counts in BH's m, is never discovered, and is logged as a trial noting "insufficient names".
+- **Shrinkage.** Signed cells pool their directional IC (sign × IC); two-sided cells pool their
+  signed IC unfolded. The direction is applied after shrinkage.
+- **Trial identity.** Trial params include n_boot, mean block, seed and a hash of each cell's
+  members, so a rerun with any different setting is a new, counted trial. n_boot ≥ 999.
+- **Groups.** DM/EM is MSCI's classification as of 2015-03-02 (start of the dev period), not at
+  each fund's inception: Israel DM, Greece EM; frontier or standalone markets at that date
+  (Argentina, Vietnam, Saudi Arabia) are counted with EM; Qatar and UAE are EM.
+- **Signals.** Track A family signal = family count / the mapped countries' n_events (share within
+  the country's own events). Track B negative attention = negative docs / docs mentioning the
+  company. GICS sectors are today's (not point-in-time), adding to the survivorship caveat.
+- **Confirmation p-values** use the normal approximation of the HAC t (deterministic, one-sided in
+  the registered direction).
