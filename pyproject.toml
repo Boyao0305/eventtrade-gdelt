@@ -1,0 +1,72 @@
+[project]
+name = "eventtrade"
+version = "0.1.0"
+description = "Event-driven trading research: GDELT signals, free daily prices, SQLite, vectorbt backtests"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2",
+    "numpy>=2.4",
+    "pandas>=3.0.3",
+    "scipy",
+    "scikit-learn",
+    "lightgbm",
+    "skfolio",
+    "vectorbt>=1.1.1",
+    "google-cloud-bigquery",
+    "db-dtypes",
+    "yfinance",
+    "requests",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "import-linter"]
+
+[project.scripts]
+eventtrade = "eventtrade.cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eventtrade"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: touches the network or a real database"]
+addopts = "-m 'not slow'"
+
+[tool.ruff]
+line-length = 100
+
+[tool.importlinter]
+root_package = "eventtrade"
+
+[[tool.importlinter.contracts]]
+name = "Layers inside the CLI container"
+type = "layers"
+layers = ["eventtrade.cli.main", "eventtrade.cli.pipelines"]
+
+[[tool.importlinter.contracts]]
+name = "Shared code does not import the container"
+type = "forbidden"
+source_modules = ["eventtrade.core", "eventtrade.adapters", "eventtrade.schemas", "eventtrade.config"]
+forbidden_modules = ["eventtrade.cli"]
+
+[[tool.importlinter.contracts]]
+name = "Core does no I/O"
+type = "forbidden"
+source_modules = ["eventtrade.core"]
+forbidden_modules = ["eventtrade.adapters", "sqlite3", "requests", "yfinance", "google.cloud"]
+
+[[tool.importlinter.contracts]]
+name = "Core and adapters are independent"
+type = "independence"
+modules = ["eventtrade.core", "eventtrade.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "Schemas import nothing from the package"
+type = "forbidden"
+source_modules = ["eventtrade.schemas"]
+forbidden_modules = ["eventtrade.core", "eventtrade.adapters", "eventtrade.cli", "eventtrade.config"]
