@@ -1005,6 +1005,207 @@ def test_screen_track_b_real_joint_test(screen_cfg):
     assert any("insufficient names" in line and "6 cell(s)" in line for line in out)
 
 
+# --- S3 trial identity is unchanged by the A2 generalisation ----------------------------------
+# Literal ids computed with the code as it was before `--set a2` existed (ADR 0003 trials
+# already in the log must keep their ids, or a rerun would double-count them).
+S3_GOLDEN = [
+    (("violence", "S3.violence", "em", 20, -1.0, ("EM1", "EM2", "EM3", "EM4", "EM5")), "A",
+     "signal-A-8093ec79d366", "signal-A-c33211715ce8"),
+    (("quad1", "S3.quad1", "commodity", 5, None,
+      ("CPER", "DBA", "GLD", "SLV", "UNG", "USO", "XLE")), "A",
+     "signal-A-31789a3631d2", "signal-A-543ea3de5d83"),
+    (("org_tone", "S3.org_tone", "Energy", 5, 1.0, ("XOM", "CVX")), "B",
+     "signal-B-8844a907303f", "signal-B-f9b7bead22ba"),
+]
+
+
+@pytest.mark.parametrize("fields,track,disc_id,conf_id", S3_GOLDEN)
+def test_s3_trial_ids_unchanged(fields, track, disc_id, conf_id):
+    c = pl._ScreenCell(*fields)
+    assert c.hypothesis == "S3" and c.themes_hash is None
+    k = c.id(track)
+    for period, window, expected in (("discovery", (date(2015, 3, 2), date(2019, 12, 31)),
+                                      disc_id),
+                                     ("confirmation", (date(2020, 1, 1), date(2025, 3, 31)),
+                                      conf_id)):
+        params = pl._screen_params(c, k, period, 2000, 20261004)
+        assert set(params) == {"cell", "signal", "group", "horizon", "period",
+                               "features_version", "expected_sign", "recipe", "n_boot",
+                               "mean_block", "seed", "members_hash"}
+        assert pl.trial_id("signal", track, params, *window) == expected
+    assert (pl.SCREEN_DISCOVERY, pl.SCREEN_CONFIRMATION) == (
+        (date(2015, 3, 2), date(2019, 12, 31)), (date(2020, 1, 1), date(2025, 3, 31)))
+
+
+def test_s3_is_the_default_set(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    _force_joint(monkeypatch, significant=False)
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT)
+    default = sorted(t.trial_id for t in store.read_trials("A"))
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT, screen_set="s3")
+    assert sorted(t.trial_id for t in store.read_trials("A")) == default
+    assert {t.hypothesis for t in store.read_trials("A")} == {"S3"}
+    assert all("hypothesis" not in t.params for t in store.read_trials("A"))
+
+
+# --- ADR 0004 theme screen (screen --set a2) --------------------------------------------------
+# The real pinned tickers (ADR 0004 groups) with synthetic themes; rows on every calendar day of
+# SCREEN_DATA under the gkg_themes_daily query name, so the dev period is complete.
+
+A2_GROUPS = {"commodity": ["USO", "UNG", "GLD", "SLV", "CPER", "DBA", "XLE"],
+             "sector": ["XLB", "XLC", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
+                        "ITA"]}
+A2_TICKERS = [t for m in A2_GROUPS.values() for t in m]
+
+
+def _a2_assets(drop: str | None = None) -> list[Asset]:
+    out = [Asset(ticker="TLT", name="TLT", kind="etf", track="A", group="rates",
+                 gkg_themes=["TH_RATES"])]
+    for g, tickers in A2_GROUPS.items():
+        out += [Asset(ticker=t, name=t, kind="etf", track="A",
+                      group="commodity" if g == "commodity" and t != "XLE" else "sector",
+                      gkg_themes=[f"TH_{t}", "TH_SHARED"],
+                      screen_group="commodity" if g == "commodity" else None)
+                for t in tickers if t != drop]
+    return out
+
+
+def _theme_rows(start: date, end: date, themes: list[str], seed: int) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    rows = []
+    for d in pd.date_range(start, end, freq="D"):
+        total = int(rng.integers(100_000, 200_000))
+        for th in themes:
+            k = int(rng.integers(1, 300))
+            rows += [(d, "gkg", "_GLOBAL", f"theme_{th}_docs", float(k), total),
+                     (d, "gkg", "_GLOBAL", f"theme_{th}_tone", float(rng.normal(-1, 2)) * k, k)]
+    return pd.DataFrame(rows, columns=GDELT_DAILY_COLUMNS)
+
+
+def _screen_a2(store: SqliteStore, skip_month: tuple[int, int] | None = None,
+               drop: str | None = None) -> None:
+    assets = _a2_assets(drop)
+    store.upsert_assets(assets)
+    store.upsert_prices(_bars([a.ticker for a in assets], *SCREEN_DATA, seed=8), "yfinance")
+    themes = sorted({t for a in assets for t in a.gkg_themes})
+    rows = _theme_rows(*SCREEN_DATA, themes, seed=9)
+    if skip_month is not None:
+        sd = pd.to_datetime(rows["session_date"])
+        rows = rows[~((sd.dt.year == skip_month[0]) & (sd.dt.month == skip_month[1]))]
+    store.upsert_gdelt_daily(rows, "gkg_themes_daily")
+
+
+def _a2_trials(store, period=None):
+    return [t for t in store.read_trials("A", "signal") if t.hypothesis == "A2"
+            and (period is None or t.params["period"] == period)]
+
+
+def test_a2_refuses_until_every_dev_month_is_stored(screen_cfg):
+    # ADR 0004 "Run condition": one missing dev month -> MISSING (exit 4), nothing logged, and
+    # no GDELT value is read (the check uses stored session dates only).
+    inner = SqliteStore(screen_cfg.db_path)
+    inner.init()
+    _screen_a2(inner, skip_month=(2023, 6))
+    store = RecordingStore(inner)
+    out: list[str] = []
+    rc = pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=N_BOOT,
+                   screen_set="a2")
+    assert rc == pl.MISSING
+    assert "1 dev month(s)" in out[-1] and "2023-06" in out[-1]
+    assert [r for r in store.reads if r[0] == "gdelt_daily"] == []
+    assert inner.read_trials("A") == []
+
+
+def test_a2_month_missing_only_in_holdout_is_not_required(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_a2(store, skip_month=(2024, 8))  # after the hold-out start: not a dev month
+    _force_joint(monkeypatch, significant=False)
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT,
+                     screen_set="a2") == pl.OK
+
+
+def test_pending_months_reads_session_dates_only(screen_cfg):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    rows = _theme_rows(date(2023, 1, 1), date(2023, 3, 30), ["X"], seed=1)  # March incomplete
+    store.upsert_gdelt_daily(rows, "gkg_themes_daily")
+    got = pl.pending_months(store, "gkg_themes_daily", date(2023, 1, 1), date(2023, 4, 30))
+    assert got == [(date(2023, 3, 1), date(2023, 3, 31)), (date(2023, 4, 1), date(2023, 4, 30))]
+    assert pl.pending_months(store, "gkg_orgs_daily", date(2023, 1, 1), date(2023, 1, 31)) == [
+        (date(2023, 1, 1), date(2023, 1, 31))]
+
+
+def test_a2_refuses_track_b(screen_cfg, store):
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "B", lambda: NOW, out.append, n_boot=N_BOOT,
+                     screen_set="a2") == pl.REFUSED
+    assert "Track A only" in out[-1]
+
+
+def test_a2_refuses_without_every_pinned_member(screen_cfg):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_a2(store, drop="ITA")
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=N_BOOT,
+                     screen_set="a2") == pl.MISSING
+    assert "ITA" in out[-1]
+    assert store.read_trials("A") == []
+
+
+def test_a2_real_joint_test_logs_eight_cells(screen_cfg):
+    # No forced p-values: the real bootstrap runs end to end on gkg theme rows.
+    inner = SqliteStore(screen_cfg.db_path)
+    inner.init()
+    _screen_a2(inner)
+    store = RecordingStore(inner)
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=N_BOOT,
+                     screen_set="a2") == pl.OK
+    for _, start, end in store.reads:
+        assert end is not None and end <= SCREEN_HOLDOUT
+    disc = _a2_trials(inner, "discovery")
+    assert len(disc) == 8 and len(inner.read_trials("A")) == len(_a2_trials(inner))
+    assert {t.params["cell"] for t in disc} == {
+        f"A|{s}|{g}|h{h}" for s in ("attention", "tone") for g in ("commodity", "sector")
+        for h in (5, 20)}
+    signs = {(t.params["signal"], t.params["group"]): t.params["expected_sign"] for t in disc}
+    assert signs == {("A2.attention", "commodity"): None, ("A2.attention", "sector"): None,
+                     ("A2.tone", "commodity"): None, ("A2.tone", "sector"): 1.0}
+    by_ticker = {a.ticker: a for a in _a2_assets()}
+    for t in disc:
+        g = t.params["group"]
+        assert t.params["hypothesis"] == "A2"
+        assert t.params["members_hash"] == _members_hash(A2_GROUPS[g])
+        assert t.params["themes_hash"] == pl._themes_hash([by_ticker[x] for x in A2_GROUPS[g]])
+        assert {k: t.params[k] for k in ("recipe", "n_boot", "mean_block", "seed",
+                                         "features_version")} == {
+            "recipe": "sm5_z.60", "n_boot": N_BOOT, "mean_block": 40.0,
+            "seed": screen_cfg.seed, "features_version": FEATURES_VERSION}
+        assert (t.data_start, t.data_end) == SCREEN_DISC
+        note = json.loads(t.notes)
+        assert note["note"] is None and note["p"] is not None and note["n_days"] > 100
+    assert any("hypothesis A2" in line for line in out)
+
+
+def test_a2_theme_mapping_is_part_of_trial_identity(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_a2(store)
+    _force_joint(monkeypatch, significant=False)
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT, screen_set="a2")
+    first = {t.trial_id for t in store.read_trials("A")}
+    changed = [a.model_copy(update={"gkg_themes": ["TH_SHARED"]}) if a.ticker == "XLK" else a
+               for a in _a2_assets()]
+    store.upsert_assets(changed)
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT, screen_set="a2")
+    every = {t.trial_id for t in store.read_trials("A")}
+    assert len(first) == 8 and len(every) == 12  # 4 sector cells are new trials
+
+
 EMBARGO_CASES = [
     # (trading days, period end, horizon) -> last feature date whose label ends by `end`
     (pd.bdate_range("2019-12-02", "2020-01-10"), date(2019, 12, 31), 5, date(2019, 12, 23)),

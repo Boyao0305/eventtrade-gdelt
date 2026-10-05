@@ -59,11 +59,29 @@ def test_screen_without_screen_groups_is_missing(tmp_path: Path):
     assert cli.main(["--home", str(tmp_path), "screen", "--track", "B", "--n-boot", "999"]) == 4
 
 
+def test_screen_a2_without_theme_pull_is_missing(tmp_path: Path, capsys):
+    # ADR 0004 "Run condition": no gkg_themes_daily month stored -> refused with exit 4.
+    cli.main(["--home", str(tmp_path), "init-db"])
+    assert cli.main(["--home", str(tmp_path), "screen", "--track", "A", "--set", "a2"]) == 4
+    assert "gkg_themes_daily" in capsys.readouterr().out
+
+
+def test_screen_a2_on_track_b_is_refused(tmp_path: Path):
+    cli.main(["--home", str(tmp_path), "init-db"])
+    assert cli.main(["--home", str(tmp_path), "screen", "--track", "B", "--set", "a2"]) == 2
+
+
+def test_screen_set_defaults_to_s3():
+    args = cli._parser().parse_args(["screen", "--track", "A"])
+    assert args.screen_set == "s3"
+
+
 # n_boot >= 999 (ADR 0003 implementation notes): fewer draws is a usage error, exit 2.
 @pytest.mark.parametrize("argv", [["screen"], ["screen", "--track", "C"],
                                   ["screen", "--track", "A", "--n-boot", "0"],
                                   ["screen", "--track", "A", "--n-boot", "998"],
-                                  ["screen", "--track", "A", "--n-boot", "x"]])
+                                  ["screen", "--track", "A", "--n-boot", "x"],
+                                  ["screen", "--track", "A", "--set", "a3"]])
 def test_screen_usage_errors_exit_2(tmp_path: Path, argv):
     with pytest.raises(SystemExit) as e:
         cli.main(["--home", str(tmp_path), *argv])

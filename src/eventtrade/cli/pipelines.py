@@ -311,8 +311,7 @@ def _ingest_gdelt_window(
         return MISSING
     query_name, params, pull = plan
     chunks = month_chunks(start, end)
-    have = set(store.gdelt_session_dates(query_name, start, end + timedelta(days=1)))
-    pending = [(a, b) for a, b in chunks if not (a in have and b in have)]
+    pending = pending_months(store, query_name, start, end)
     echo(f"{dataset} ({query_name}) sessions {start}..{end}: {len(chunks)} month(s),"
          f" {len(chunks) - len(pending)} already stored, {len(pending)} to pull")
     spent = store.month_to_date_bytes(now())
@@ -361,6 +360,18 @@ def _gdelt_plan(
         return None
     return _QUERY_OF["gkg-orgs"], {"aliases": aliases}, (
         lambda g, a, b, c: g.pull_gkg_orgs_daily(a, b, c, aliases))
+
+
+def pending_months(
+    store: Store, query_name: str, start: date, end: date
+) -> list[tuple[date, date]]:
+    """Month chunks of [start, end] (inclusive) not yet stored under `query_name`.
+
+    A month counts as stored when both its first and last session dates have rows written by
+    that query (what `ingest-gdelt` skips). Reads session dates only, never values.
+    """
+    have = set(store.gdelt_session_dates(query_name, start, end + timedelta(days=1)))
+    return [(a, b) for a, b in month_chunks(start, end) if not (a in have and b in have)]
 
 
 def month_chunks(start: date, end: date) -> list[tuple[date, date]]:
@@ -590,15 +601,25 @@ SCREEN_MIN_N_BOOT = 999
 # Trial note of a cell with fewer than SCREEN_MIN_NAMES names on most of its discovery days.
 SCREEN_THIN_NOTE = "insufficient names"
 
+# Cell sets the screen can run (`screen --set`). 's3': ADR 0003 sub-category screen (both tracks).
+# 'a2': ADR 0004 GKG theme screen (Track A only), same statistics, its own cells and hypothesis.
+ScreenSet = Literal["s3", "a2"]
+SCREEN_SETS: tuple[str, ...] = ("s3", "a2")
+A2_HYPOTHESIS = "A2"
+# ADR 0004 "Run condition": every dev month of this query must be stored before A2 runs.
+A2_QUERY = _QUERY_OF["gkg-themes"]
+
 
 @dataclass(frozen=True)
 class _ScreenCell:
-    signal: str  # family name in core/screen_features, e.g. 'violence'
-    feature: str  # 'S3.<signal>'
-    group: str  # Track A 'dm' | 'em' | 'commodity'; Track B a GICS sector
+    signal: str  # signal name in core/screen_features, e.g. 'violence', 'attention'
+    feature: str  # '<hypothesis>.<signal>', e.g. 'S3.violence', 'A2.tone'
+    group: str  # S3 Track A 'dm' | 'em' | 'commodity'; Track B a GICS sector; A2 'commodity' | 'sector'
     horizon: int
     sign: float | None  # pre-registered IC sign; None = two-sided
     members: tuple[str, ...]
+    hypothesis: str = SCREEN_HYPOTHESIS
+    themes_hash: str | None = None  # A2 only: hash of the members' theme mapping
 
     def id(self, track: Track) -> str:
         return f"{track}|{self.signal}|{self.group}|h{self.horizon}"
@@ -606,10 +627,19 @@ class _ScreenCell:
 
 def screen(
     cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print, n_boot: int = 2000,
+    screen_set: ScreenSet = "s3",
 ) -> int:
-    """ADR 0003 sub-category screen of one track: discovery, joint test, EB, BH, confirmation.
+    """Pre-registered screen of one track: discovery, joint test, EB, BH, confirmation.
 
-    Cells = the track's screen signals x asset groups (`Asset.screen_group`) x horizons 5, 20.
+    `screen_set` 's3' (default): ADR 0003 sub-category screen, hypothesis S3. Cells = the track's
+    screen signals x asset groups (`Asset.screen_group`) x horizons 5, 20.
+    `screen_set` 'a2': ADR 0004 GKG theme screen, Track A only, hypothesis A2. Cells = theme
+    attention and tone x the pinned groups commodity / sector (`screen_features.
+    THEME_GROUP_MEMBERS`) x horizons 5, 20 = 8 cells. MISSING unless every dev month of the
+    `gkg_themes_daily` query is stored (checked on session dates, before any value is read) and
+    every pinned member is a stored asset with themes; REFUSED on Track B. Trial params also
+    carry `hypothesis` 'A2' and a hash of the members' theme mapping. Everything below is shared.
+
     Signals are built in memory (`core/screen_features`, sm5_z.60), never stored. Every
     pre-registered cell counts (ADR 0003 implementation notes): a cell whose discovery IC is
     defined (>= 5 names) on fewer than half of its discovery days is kept, left out of the joint
@@ -622,6 +652,13 @@ def screen(
     discovery trials. REFUSED if n_boot < 999. Dev data only: every read ends at
     `cfg.holdout_start` (half-open).
     """
+    if screen_set not in SCREEN_SETS:
+        echo(f"refused: unknown screen set {screen_set!r} (one of {', '.join(SCREEN_SETS)})")
+        return REFUSED
+    a2 = screen_set == "a2"
+    if a2 and track != "A":
+        echo("refused: the a2 theme screen (ADR 0004) is Track A only")
+        return REFUSED
     if n_boot < SCREEN_MIN_N_BOOT:
         echo(f"refused: n_boot {n_boot} < {SCREEN_MIN_N_BOOT} (ADR 0003 implementation notes)")
         return REFUSED
@@ -629,34 +666,66 @@ def screen(
         echo(f"refused: screen periods {SCREEN_DISCOVERY[0]}..{SCREEN_CONFIRMATION[1]} are not"
              f" inside the dev period {cfg.start}..{cfg.holdout_start} (ADR 0001)")
         return REFUSED
+    if a2:
+        last_dev = cfg.holdout_start - timedelta(days=1)
+        pending = pending_months(store, A2_QUERY, cfg.start, last_dev)
+        if pending:
+            shown = ", ".join(f"{a:%Y-%m}" for a, _ in pending[:6])
+            echo(f"refused to run A2: {len(pending)} dev month(s) of {A2_QUERY} not stored"
+                 f" ({shown}{', ...' if len(pending) > 6 else ''}); ADR 0004 runs only when"
+                 " `ingest-gdelt gkg-themes` has 0 months to pull for the whole dev period")
+            return MISSING
     assets = store.read_assets(track)
     if not assets:
         echo(f"no track {track} assets: run `load-universe --track {track}`")
         return MISSING
-    groups = _screen_groups(track, assets)
-    if not groups:
-        echo(f"no track {track} asset has a screen_group: run `load-universe --track {track}`"
-             " with the current universe code (ADR 0003 groups)")
-        return MISSING
+    themes_hash: dict[str, str] = {}
+    if a2:
+        groups, absent = _theme_groups(assets)
+        if absent:
+            echo(f"A2 members missing from the stored assets or without gkg_themes:"
+                 f" {', '.join(absent)}; run `load-universe --track A`")
+            return MISSING
+        by_ticker = {a.ticker: a for a in assets}
+        themes_hash = {g: _themes_hash([by_ticker[t] for t in m]) for g, m in groups.items()}
+    else:
+        groups = _screen_groups(track, assets)
+        if not groups:
+            echo(f"no track {track} asset has a screen_group: run `load-universe --track"
+                 f" {track}` with the current universe code (ADR 0003 groups)")
+            return MISSING
     tickers = sorted({t for members in groups.values() for t in members})
     prices = store.read_prices(tickers, cfg.start, cfg.holdout_start)
     if prices.empty:
         echo(f"no prices for track {track}: run `ingest-prices --track {track}`")
         return MISSING
     tdays = _trading_days(prices)
-    daily = _read_screen_gdelt(store, track, assets, cfg.start, cfg.holdout_start)
+    if a2:
+        daily = store.read_gdelt_daily("gkg", cfg.start, cfg.holdout_start, [features.GLOBAL])
+    else:
+        daily = _read_screen_gdelt(store, track, assets, cfg.start, cfg.holdout_start)
     if daily.empty:
         echo(f"no GDELT rows for track {track}: run `ingest-gdelt`")
         return MISSING
-    sig = screen_features.screen_signals(daily, tdays, assets, track)
+    if a2:
+        signals = screen_features.THEME_SIGNALS
+        hypothesis = A2_HYPOTHESIS
+        sig = screen_features.theme_signals(daily, tdays,
+                                            [a for a in assets if a.ticker in set(tickers)])
+    else:
+        signals = screen_features.screen_families(track)
+        hypothesis = SCREEN_HYPOTHESIS
+        sig = screen_features.screen_signals(daily, tdays, assets, track)
     sig = sig[sig["ticker"].isin(tickers) & (sig["date"] < pd.Timestamp(cfg.holdout_start))]
     labs = _screen_labels(cfg, store, prices, tdays, tickers, echo)
     echo(f"track {track}: {len(tickers)} screened assets in {len(groups)} group(s),"
-         f" {len(tdays)} trading days, {len(sig):,} signal rows, {len(labs):,} label rows")
+         f" {len(tdays)} trading days, {len(sig):,} signal rows, {len(labs):,} label rows"
+         + (f" (hypothesis {hypothesis})" if a2 else ""))
 
     cells = [
-        _ScreenCell(fam.name, fam.feature, g, h, fam.sign(g), tuple(sorted(members)))
-        for fam in screen_features.screen_families(track)
+        _ScreenCell(fam.name, fam.feature, g, h, fam.sign(g), tuple(sorted(members)),
+                    hypothesis, themes_hash.get(g))
+        for fam in signals
         for g, members in sorted(groups.items())
         for h in SCREEN_HORIZONS
     ]
@@ -756,7 +825,7 @@ def screen(
                 "feature_dates": [SCREEN_DISCOVERY[0].isoformat(),
                                   disc_end[c.horizon].isoformat()],
                 "min_names": SCREEN_MIN_NAMES, "joint": joint_note}
-        _log_trial(store, logged, track, "signal", SCREEN_HYPOTHESIS,
+        _log_trial(store, logged, track, "signal", c.hypothesis,
                    _screen_params(c, k, "discovery", n_boot, cfg.seed), *SCREEN_DISCOVERY,
                    now, note)
         rows[k] = [f"{note['n_days']:>6}", _fmt(mean, 9, 4), _fmt(t_disc[k], 7, 2),
@@ -781,7 +850,7 @@ def screen(
                     "shrunk_ic": _num(shrunk[k]) if k in shrunk else None,
                     "holm_alpha": SCREEN_HOLM_ALPHA, "cost_bps": conf.cost_bps,
                     "min_names": SCREEN_MIN_NAMES}
-            _log_trial(store, logged, track, "signal", SCREEN_HYPOTHESIS,
+            _log_trial(store, logged, track, "signal", c.hypothesis,
                        _screen_params(c, k, "confirmation", n_boot, cfg.seed),
                        *SCREEN_CONFIRMATION, now, note)
             rows[k] += [_fmt(v.t, 7, 2), _fmt(v.p_one_sided, 8, 4),
@@ -899,17 +968,42 @@ def _screen_params(
     c: _ScreenCell, cell_id: str, period: str, n_boot: int, seed: int
 ) -> dict[str, Any]:
     """Trial params, hence trial identity: any other bootstrap setting or membership is a new,
-    counted trial (ADR 0003 implementation notes, "Trial identity")."""
-    return {"cell": cell_id, "signal": c.feature, "group": c.group, "horizon": c.horizon,
-            "period": period, "features_version": features.FEATURES_VERSION,
-            "expected_sign": c.sign, "recipe": SCREEN_RECIPE, "n_boot": int(n_boot),
-            "mean_block": float(SCREEN_MEAN_BLOCK), "seed": int(seed),
-            "members_hash": _members_hash(c.members)}
+    counted trial (ADR 0003 implementation notes, "Trial identity").
+
+    S3 params are exactly ADR 0003's (no extra key: existing trial ids are unchanged). Any other
+    hypothesis adds `hypothesis` and, if set, `themes_hash` (A2: the members' theme mapping)."""
+    params: dict[str, Any] = {
+        "cell": cell_id, "signal": c.feature, "group": c.group, "horizon": c.horizon,
+        "period": period, "features_version": features.FEATURES_VERSION,
+        "expected_sign": c.sign, "recipe": SCREEN_RECIPE, "n_boot": int(n_boot),
+        "mean_block": float(SCREEN_MEAN_BLOCK), "seed": int(seed),
+        "members_hash": _members_hash(c.members)}
+    if c.hypothesis != SCREEN_HYPOTHESIS:
+        params["hypothesis"] = c.hypothesis
+        if c.themes_hash is not None:
+            params["themes_hash"] = c.themes_hash
+    return params
 
 
 def _members_hash(members: tuple[str, ...]) -> str:
     """First 16 hex digits of the sha256 of the cell's sorted tickers joined by ','."""
     return hashlib.sha256(",".join(sorted(members)).encode()).hexdigest()[:16]
+
+
+def _theme_groups(assets: list[Asset]) -> tuple[dict[str, list[str]], list[str]]:
+    """ADR 0004 group -> pinned tickers, and the pinned tickers absent from `assets` or without
+    gkg_themes (the screen refuses if any)."""
+    have = {a.ticker for a in assets if a.gkg_themes}
+    groups = {g: list(screen_features.THEME_GROUP_MEMBERS[g]) for g in screen_features.GROUPS_A2}
+    absent = [t for m in groups.values() for t in m if t not in have]
+    return groups, absent
+
+
+def _themes_hash(assets: Iterable[Asset]) -> str:
+    """First 16 hex digits of the sha256 of 'TICKER:THEME;THEME' (themes sorted, unique) per
+    asset, sorted and joined by ','. A changed theme mapping is a new trial."""
+    items = sorted(f"{a.ticker}:{';'.join(sorted(set(a.gkg_themes)))}" for a in assets)
+    return hashlib.sha256(",".join(items).encode()).hexdigest()[:16]
 
 
 def _num(x: float | None) -> float | None:

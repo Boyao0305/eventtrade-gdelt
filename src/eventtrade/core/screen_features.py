@@ -1,4 +1,5 @@
-"""ADR 0003 sub-category screen: the pre-registered cell signals, built with one recipe. Pure.
+"""ADR 0003 sub-category screen and ADR 0004 theme screen: the pre-registered cell signals,
+built with one recipe. Pure.
 
 Every screen signal is the v2 (`features.FEATURES_VERSION` 2) `sm5_z.60` transform of one
 statistic: the 5-trading-day mean of the floored/clipped z-score against the ticker's own
@@ -22,6 +23,23 @@ mapping on raw sums (`features.build_features`):
 Feature names: 'S3.<name>' (hypothesis S3 = this screen). Pre-registered signs per asset group
 are in `SCREEN_FAMILIES_A` / `SCREEN_SIGNALS_B` (ADR 0003 verbatim). Filter inputs to dates
 before `config.HOLDOUT_START` before calling, as for `build_features`.
+
+ADR 0004 theme screen (hypothesis A2; `THEME_SIGNALS`, `theme_signals`): the same recipe on two
+GKG theme statistics per ETF, over the ETF's mapped `gkg_themes`, read from the global
+`gkg_themes_daily` rows (entity '_GLOBAL'; `theme_<T>_docs`: value_sum = docs mentioning T,
+n = all GKG docs that session day; `theme_<T>_tone`: value_sum = summed document tone,
+n = docs mentioning T):
+
+- `attention` = sum over mapped themes T of docs(T) / all GKG docs that day;
+- `tone` = sum over mapped themes of tone_sum(T) / sum over mapped themes of docs(T).
+
+DEFINITIONAL CHOICE (ADR 0004 implementation notes). The query stores per-theme counts only, so
+"documents mentioning any mapped theme" cannot be computed exactly: a document carrying two of
+an ETF's themes is counted twice. `attention` therefore counts theme MENTIONS (document-theme
+pairs) per GKG document of the day, not distinct documents, and `tone` is the mention-weighted
+mean tone (a document with k mapped themes weighs k). The day total is counted once. Days roll
+forward to trading days on the raw sums (mentions and day totals summed over the sessions rolled
+into one trading day), like every v2 statistic.
 """
 
 from collections.abc import Mapping
@@ -57,16 +75,20 @@ class ScreenSignal:
     track: Track
     components: tuple[str, ...]   # raw gdelt_daily metrics; >1 = summed before the stat
     signs: Mapping[str, float | None]   # asset group (or ANY_GROUP) -> pre-registered IC sign
+    # gdelt_daily source of the inputs; None = the track's (events for A, gkg for B).
+    source: str | None = None
+    prefix: str = FEATURE_PREFIX   # feature-name prefix = the hypothesis ('S3.', 'A2.')
 
     @property
     def spec(self) -> MetricSpec:
         """The one recipe: mean of the (combined) metric, sm5 over a 60-day z baseline."""
-        return MetricSpec("events" if self.track == "A" else "gkg", self.name, "mean", ("sm5",),
+        source = self.source or ("events" if self.track == "A" else "gkg")
+        return MetricSpec(source, self.name, "mean", ("sm5",),
                           window=SCREEN_WINDOW, min_periods=SCREEN_MIN_PERIODS)
 
     @property
     def feature(self) -> str:
-        return FEATURE_PREFIX + self.name
+        return self.prefix + self.name
 
     def sign(self, group: str) -> float | None:
         """Pre-registered sign for an asset group; None = two-sided. Unknown group: KeyError."""
@@ -177,7 +199,115 @@ def screen_signals(
         return pd.DataFrame(columns=FEATURE_COLUMNS)
     rows = screen_inputs(gdelt_daily, track)
     feats = build_features(rows, trading_days, track_assets, [f.spec for f in fams])
-    rename = {feature_name(f.spec, "sm5"): f.feature for f in fams}
+    return _renamed(feats, fams)
+
+
+def _renamed(feats: pd.DataFrame, signals: tuple[ScreenSignal, ...]) -> pd.DataFrame:
+    """Keep the signals' sm5 columns, renamed to '<prefix><name>', in FEATURE_COLUMNS order."""
+    rename = {feature_name(f.spec, "sm5"): f.feature for f in signals}
     feats = feats[feats["feature"].isin(rename) & (feats["ticker"] != GLOBAL)]
     feats = feats.assign(feature=feats["feature"].map(rename))
     return feats[FEATURE_COLUMNS].sort_values(["date", "ticker", "feature"], ignore_index=True)
+
+
+# --- ADR 0004: GKG theme screen (hypothesis A2) -----------------------------------------------
+
+THEME_PREFIX = "A2."
+# ADR 0004 groups, pinned verbatim: commodity ETFs + XLE, and the sector SPDRs + ITA (XLE is
+# screened with the commodities only). Membership is fixed here, not derived from data.
+GROUPS_A2: tuple[str, ...] = ("commodity", "sector")
+THEME_GROUP_MEMBERS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "commodity": ("USO", "UNG", "GLD", "SLV", "CPER", "DBA", "XLE"),
+    "sector": ("XLB", "XLC", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY", "ITA"),
+})
+_THEME_ROW = r"theme_(?P<theme>.+)_(?P<kind>docs|tone)"
+# Entity under which one ETF's combined theme rows are keyed before `build_features`, so the
+# ticker mapping is the identity and can never pick up a FIPS code or a single theme.
+_THEME_ENTITY = "a2:"
+
+
+def _theme(name: str, raw: str, commodity: float | None, sector: float | None) -> ScreenSignal:
+    return ScreenSignal(name, "A", (raw,),
+                        MappingProxyType({"commodity": commodity, "sector": sector}),
+                        source="gkg", prefix=THEME_PREFIX)
+
+
+# ADR 0004: attention two-sided in both groups; tone (+) for sectors, two-sided for commodities
+# (bad news about supply can raise prices).
+THEME_SIGNALS: tuple[ScreenSignal, ...] = (
+    _theme("attention", "theme_<T>_docs", None, None),
+    _theme("tone", "theme_<T>_tone", None, +1.0),
+)
+
+
+def theme_inputs(gdelt_daily: pd.DataFrame, assets: list[Asset]) -> pd.DataFrame:
+    """GDELT_DAILY_COLUMNS rows of each ETF's combined theme statistics (module docstring).
+
+    Reads only source 'gkg', entity '_GLOBAL', metrics `theme_<T>_docs` / `theme_<T>_tone`;
+    every other row is ignored. For each ETF in `assets` with `gkg_themes` (a theme listed twice
+    counts once), entity 'a2:<ticker>':
+
+    - metric 'attention' on every session day with a known day total (any theme docs row that
+      day): value_sum = sum of docs(T) over the mapped themes (0 if none has a row), n = the day
+      total. The docs rows of one day must agree on n (ValueError otherwise).
+    - metric 'tone' on session days where a mapped theme has a tone row with n > 0:
+      value_sum = sum of tone_sum(T), n = sum of docs(T), over those rows.
+    """
+    missing = [c for c in GDELT_DAILY_COLUMNS if c not in gdelt_daily.columns]
+    if missing:
+        raise ValueError(f"gdelt_daily is missing columns {missing}")
+    empty = pd.DataFrame(columns=GDELT_DAILY_COLUMNS)
+    df = gdelt_daily.loc[(gdelt_daily["source"] == "gkg") & (gdelt_daily["entity"] == GLOBAL),
+                         GDELT_DAILY_COLUMNS]
+    ext = df["metric"].astype(str).str.extract(f"^{_THEME_ROW}$")
+    df = df.assign(theme=ext["theme"], kind=ext["kind"])[ext["kind"].notna()]
+    pairs = [(t, a.ticker) for a in assets if a.kind == "etf"
+             for t in dict.fromkeys(a.gkg_themes)]
+    if df.empty or not pairs:
+        return empty
+    df = df.assign(session_date=pd.to_datetime(df["session_date"]).astype("datetime64[ns]"),
+                   value_sum=df["value_sum"].astype("float64"), n=df["n"].astype("float64"))
+    mapping = pd.DataFrame(pairs, columns=["theme", "ticker"])
+
+    docs = df[df["kind"] == "docs"]
+    by_day = docs.groupby("session_date")["n"]
+    lo, hi = by_day.min(), by_day.max()
+    bad = lo != hi
+    if bad.any():
+        d = bad[bad].index[0]
+        raise ValueError(f"theme docs rows disagree on the day total (n) at {d.date()}:"
+                         f" {lo[d]} vs {hi[d]}")
+    totals = lo.rename("n").reset_index()
+    mentions = (docs.merge(mapping, on="theme")
+                .groupby(["session_date", "ticker"], as_index=False)["value_sum"].sum())
+    grid = totals.merge(pd.DataFrame({"ticker": sorted(mapping["ticker"].unique())}),
+                        how="cross")
+    att = grid.merge(mentions, on=["session_date", "ticker"], how="left")
+    att = att.assign(value_sum=att["value_sum"].fillna(0.0), metric="attention")
+
+    tone = df[(df["kind"] == "tone") & (df["n"] > 0)].merge(mapping, on="theme")
+    tone = (tone.groupby(["session_date", "ticker"], as_index=False)[["value_sum", "n"]].sum()
+            .assign(metric="tone"))
+
+    out = pd.concat([att, tone], ignore_index=True)
+    out = out.assign(source="gkg", entity=_THEME_ENTITY + out["ticker"])[GDELT_DAILY_COLUMNS]
+    return out.sort_values(["session_date", "source", "entity", "metric"], ignore_index=True)
+
+
+def theme_signals(
+    gdelt_daily: pd.DataFrame, trading_days: list[date], assets: list[Asset],
+) -> pd.DataFrame:
+    """FEATURE_COLUMNS of the ADR 0004 theme signals ('A2.attention', 'A2.tone'; sm5_z.60).
+
+    Every ETF in `assets` with `gkg_themes` gets both signals (the caller picks the group
+    members). Composes `theme_inputs` with `features.build_features`, so roll-forward, zero-fill
+    on observed days and the look-ahead rules are exactly v2's. NaN/inf values are dropped.
+    """
+    etfs = [a for a in assets if a.kind == "etf" and a.gkg_themes]
+    rows = theme_inputs(gdelt_daily, etfs)
+    if rows.empty:
+        return pd.DataFrame(columns=FEATURE_COLUMNS)
+    keyed = [a.model_copy(update={"fips_countries": [], "gkg_themes": [_THEME_ENTITY + a.ticker]})
+             for a in etfs]
+    feats = build_features(rows, trading_days, keyed, [s.spec for s in THEME_SIGNALS])
+    return _renamed(feats, THEME_SIGNALS)

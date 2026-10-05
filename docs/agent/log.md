@@ -307,3 +307,35 @@ November (resumable; it skips stored months). Check with `ingest-gdelt gkg-theme
 **Next:** implement the ADR 0004 A2 theme screen (8 cells) now, but run it only when the theme
 pull is complete for the whole dev period. Do not read theme values before that run.
 After A2, every ADR 0001 hypothesis has been tested; write the final summary experiment.
+
+## 2026-10-05 — ADR 0004 A2 theme screen implemented (not run)
+
+The GKG theme pull was running throughout. No theme value was read: the work used only the SQL
+contract, the code and synthetic fixtures. I did not even run a `SELECT DISTINCT metric` against
+the live db, because a long read could block the running writer.
+
+- **Generalised rather than duplicated.** `screen(..., screen_set="s3"|"a2")` keeps one code path.
+  `a2` changes only the signals (`screen_features.THEME_SIGNALS`), the groups (pinned
+  `THEME_GROUP_MEMBERS`), the GDELT read (gkg `_GLOBAL` rows), the hypothesis (`A2`) and two
+  extra trial params (`hypothesis`, `themes_hash`). CLI: `screen --track A --set a2`; the default
+  `s3` is unchanged. S3 trial ids are pinned by literal ids computed before the change
+  (`test_s3_trial_ids_unchanged`).
+- **Theme signals** (`theme_inputs`, `theme_signals`): per ETF, attention = Σ mentions of mapped
+  themes / day total, and tone = Σ tone / Σ mentions, keyed as entity `a2:<ticker>` and pushed
+  through `build_features`. This counts theme mentions, not distinct documents; the query has
+  per-theme counts only. The choice is recorded in ADR 0004's implementation notes.
+- **Run condition:** `pending_months(store, query, start, end)` was factored out of
+  `ingest_gdelt`. `screen --set a2` exits 4 before any GDELT read unless it is empty for the whole
+  dev period. The test checks that no `read_gdelt_daily` call happens on refusal.
+- **Found, not changed:** the v2 `gkg.theme_docs.mean` family (A2 in `_FAMILIES`) sums n (the day
+  total) over an ETF's themes, because `theme_docs` is not in `features.DAY_TOTAL_N_METRICS`. Its
+  value is therefore Σ docs / (k_present x total). No v2 theme trial exists yet (themes were never
+  pulled), and the A2 screen does not use this path. Fixing it would change features v2, so the
+  decision is left to the owner.
+- ADR 0004 says "19 ETFs", but its lists hold 18 distinct tickers (XLE is listed twice). The notes
+  record this.
+- Tests: `tests/core/test_theme_features.py` (sign table verbatim, groups vs CSV, frozen theme
+  mapping, case table, weekend roll, hand-reference sm5, no-future-rows perturbation, day-t
+  reach) and the A2 orchestration and CLI tests in `tests/cli/`.
+- **Next:** when `ingest-gdelt gkg-themes` (dry run) reports 0 to pull, run
+  `screen --track A --set a2` from a frozen checkout, then write the experiment.
