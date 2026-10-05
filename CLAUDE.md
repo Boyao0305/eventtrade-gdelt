@@ -25,3 +25,17 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
 - **Running from a worktree:** data and secrets live in the main checkout. Set
   `EVENTTRADE_HOME=D:/programmation/Github/b2b_approach/team_tool/workspace/gdelt`.
 - **Python 3.12 only** (`.venv`, created with `uv`). Run tests with `.venv/Scripts/python -m pytest`.
+- **`events_partitioned` is partitioned by SQLDATE, not DATEADDED** (experiment 0001). A DATEADDED
+  window must scan a lookback of earlier partitions; that is why events cost more per month than
+  their row count suggests.
+- **Do not install or upgrade packages in `.venv` while a pull is running.** On 2026-10-05 an
+  install killed both running `ingest-gdelt` processes silently (no traceback). Months already
+  written survive; rerun the same command and it resumes.
+- **The service account cannot use the BigQuery Storage API** (403 `bigquery.readsessions.create`).
+  Keep `google-cloud-bigquery-storage` uninstalled, otherwise result downloads fail instead of
+  falling back to REST. Downloads are the bottleneck (~2 min per month per source): speed up by
+  running `ingest-gdelt` concurrently over disjoint `--start/--end` ranges (same BigQuery cost).
+- **First import of the heavy stack is slow** (~4 min after a fresh install, vectorbt ~16–40 s
+  after). `lint-imports` needs `PYTHONUTF8=1` on this console.
+- **GKG themes for the full dev range cost ~1 TB** — more than one month's free tier. Pull them in
+  a later billing month (see experiment 0001's plan).
