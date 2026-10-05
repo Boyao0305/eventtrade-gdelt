@@ -1,6 +1,7 @@
 """Orchestration: fake GDELT and price sources, a real SqliteStore on a tmp file."""
 
 import json
+import math
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -646,6 +647,397 @@ GATE4_CASES = [
 @pytest.mark.parametrize("lo,expected", GATE4_CASES)
 def test_gate4_verdict(lo, expected):
     assert pl._gate4_verdict(lo) == expected
+
+
+# --- sub-category screen (ADR 0003) ------------------------------------------------------------
+# Short synthetic windows replace the ADR's 2015-2019 / 2020-2025Q1 split; the hold-out starts
+# 2024-07-01 and the store holds price and GDELT rows after it that must never be read.
+
+SCREEN_DISC = (date(2023, 1, 2), date(2023, 12, 29))
+SCREEN_CONF = (date(2024, 1, 2), date(2024, 6, 28))
+SCREEN_HOLDOUT = date(2024, 7, 1)
+SCREEN_DATA = (date(2022, 9, 1), date(2024, 9, 30))  # runs into the hold-out on purpose
+SCREEN_METRICS = ["n_events", "quad1", "quad2", "quad3", "quad4", "root_14_protest",
+                  "root_163_sanctions", "root_18_assault", "root_19_fight",
+                  "root_20_massviolence"]
+# group -> tickers (one FIPS code each); commodity has 3 names (< 5): its cells keep their place
+# (ADR 0003 implementation notes) with p = NaN, counted in BH's m, never discovered.
+SCREEN_A = {"dm": ["DM1", "DM2", "DM3", "DM4", "DM5"], "em": ["EM1", "EM2", "EM3", "EM4", "EM5"],
+            "commodity": ["CO1", "CO2", "CO3"]}
+N_BOOT = 999  # the smallest n_boot the screen accepts
+
+
+class RecordingStore:
+    """Delegates to a real SqliteStore and records the date window of every dated read."""
+
+    def __init__(self, inner: SqliteStore) -> None:
+        self.inner = inner
+        self.reads: list[tuple[str, date | None, date | None]] = []
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def read_prices(self, tickers, start, end):
+        self.reads.append(("prices", start, end))
+        return self.inner.read_prices(tickers, start, end)
+
+    def read_gdelt_daily(self, source, start, end, entities=None):
+        self.reads.append(("gdelt_daily", start, end))
+        return self.inner.read_gdelt_daily(source, start, end, entities)
+
+    def read_labels(self, start, end, horizons=None):
+        self.reads.append(("labels", start, end))
+        return self.inner.read_labels(start, end, horizons)
+
+    def read_features(self, start, end, features=None):
+        self.reads.append(("features", start, end))
+        return self.inner.read_features(start, end, features)
+
+
+@pytest.fixture
+def screen_cfg(tmp_path: Path, monkeypatch) -> Config:
+    monkeypatch.setattr(pl, "SCREEN_DISCOVERY", SCREEN_DISC)
+    monkeypatch.setattr(pl, "SCREEN_CONFIRMATION", SCREEN_CONF)
+    return Config(home=tmp_path, gcp_key_path=tmp_path / "k.json", start=SCREEN_DATA[0],
+                  holdout_start=SCREEN_HOLDOUT)
+
+
+def _screen_track_a(store: SqliteStore, with_groups: bool = True) -> None:
+    assets = [Asset(ticker="SPY", name="SPY", kind="etf", track="A", group="market",
+                    fips_countries=["US"])]
+    for g, tickers in SCREEN_A.items():
+        assets += [Asset(ticker=t, name=t, kind="etf", track="A", group="country",
+                         fips_countries=[t[:1] + t[-1]],
+                         screen_group=g if with_groups else None) for t in tickers]
+    store.upsert_assets(assets)
+    tickers = [a.ticker for a in assets]
+    store.upsert_prices(_bars(tickers, *SCREEN_DATA, seed=3), "yfinance")
+    rng = np.random.default_rng(4)
+    rows = []
+    for d in pd.date_range(*SCREEN_DATA, freq="D"):
+        for e in {a.fips_countries[0] for a in assets}:
+            n = float(rng.integers(100, 300))
+            rows.append((d, "events", e, "n_events", n, int(n)))
+            for m in SCREEN_METRICS[1:]:
+                rows.append((d, "events", e, m, float(rng.integers(0, 30)), int(n)))
+    store.upsert_gdelt_daily(pd.DataFrame(rows, columns=GDELT_DAILY_COLUMNS), "events_daily")
+
+
+def _force_joint(monkeypatch, significant: bool, p_cell: dict[str, float] | None = None):
+    """Run the real joint test, then overwrite its p-values (orchestration tests only)."""
+    import dataclasses
+
+    real = pl.screen_stats.joint_test
+
+    def fake(ic_by_cell, horizon_of, signs, n_boot, mean_block, seed):
+        res = real(ic_by_cell, horizon_of, signs, n_boot, mean_block, seed)
+        p = 0.001 if significant else 0.9
+        cells = {c: (p_cell or {}).get(c, 1.0) for c in res.p_cell}
+        return dataclasses.replace(res, p_s=p, p_m=p, p_cell=cells)
+
+    monkeypatch.setattr(pl.screen_stats, "joint_test", fake)
+
+
+def _screen_trials(store, period=None):
+    return [t for t in store.read_trials("A", "signal") if t.hypothesis == "S3"
+            and (period is None or t.params["period"] == period)]
+
+
+N_A_CELLS = 7 * 3 * 2  # 7 families x {dm, em, commodity} x h {5, 20}; every cell counts
+N_A_THIN = 7 * 1 * 2  # the commodity cells (3 names)
+
+
+def _members_hash(tickers) -> str:
+    import hashlib
+
+    return hashlib.sha256(",".join(sorted(tickers)).encode()).hexdigest()[:16]
+
+
+def test_screen_refuses_without_screen_groups(screen_cfg):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store, with_groups=False)
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=N_BOOT) == pl.MISSING
+    assert "load-universe" in out[-1]
+    assert store.read_trials("A") == []
+
+
+def test_screen_stop_path_logs_every_discovery_cell(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    _force_joint(monkeypatch, significant=False)
+    confirm_calls = []
+    monkeypatch.setattr(pl.screen_stats, "confirm", lambda *a, **k: confirm_calls.append(a))
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=N_BOOT) == pl.OK
+    trials = _screen_trials(store)
+    assert len(trials) == N_A_CELLS and confirm_calls == []
+    assert {t.params["period"] for t in trials} == {"discovery"}
+    assert {t.params["group"] for t in trials} == {"dm", "em", "commodity"}
+    assert any("insufficient names" in line and "14 cell(s)" in line for line in out)
+    assert any("stops here" in line for line in out)
+    for t in trials:
+        note = json.loads(t.notes)
+        assert note["joint"]["significant"] is False and note["discovered"] is False
+        assert note["shrunk_ic"] is None
+        assert (t.data_start, t.data_end) == SCREEN_DISC
+        thin = t.params["group"] == "commodity"
+        assert (note.get("note") == "insufficient names") is thin
+        if thin:
+            assert note["p"] is None and note["t"] is None
+
+
+def test_screen_thin_cells_counted_in_bh_never_discovered(screen_cfg, monkeypatch):
+    # ADR 0003 implementation notes: a cell with too few names keeps its place: p = NaN, it
+    # counts in BH's m, is never discovered, and is logged noting "insufficient names". It is
+    # left out of the joint test (no t to contribute).
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    _force_joint(monkeypatch, significant=True, p_cell={"A|quad1|dm|h5": 0.001})
+    seen = {}
+    real_joint, real_bh = pl.screen_stats.joint_test, pl.screen_stats.benjamini_hochberg
+
+    def spy_joint(ic_by_cell, *rest):
+        seen["joint_cells"] = set(ic_by_cell)
+        return real_joint(ic_by_cell, *rest)
+
+    def spy_bh(pvals, q):
+        seen["bh"] = dict(pvals)
+        return real_bh(pvals, q)
+
+    monkeypatch.setattr(pl.screen_stats, "joint_test", spy_joint)
+    monkeypatch.setattr(pl.screen_stats, "benjamini_hochberg", spy_bh)
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT) == pl.OK
+    thin = {c for c in seen["bh"] if "|commodity|" in c}
+    assert len(seen["bh"]) == N_A_CELLS and len(thin) == N_A_THIN
+    assert all(math.isnan(seen["bh"][c]) for c in thin)
+    assert seen["joint_cells"] == set(seen["bh"]) - thin
+    disc = {t.params["cell"]: json.loads(t.notes) for t in _screen_trials(store, "discovery")}
+    assert len(disc) == N_A_CELLS
+    for c in thin:
+        assert disc[c]["note"] == "insufficient names" and disc[c]["discovered"] is False
+        assert disc[c]["p"] is None and disc[c]["shrunk_ic"] is None
+    assert disc["A|quad1|dm|h5"]["discovered"] is True
+
+
+def test_screen_refuses_n_boot_below_999(screen_cfg):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=998) == pl.REFUSED
+    assert "n_boot" in out[-1]
+    assert store.read_trials("A") == []
+
+
+def test_screen_other_bootstrap_settings_are_new_trials(screen_cfg, monkeypatch):
+    # Trial identity includes n_boot, mean block, seed and the members hash: a rerun with any
+    # other setting is a new, counted trial (ADR 0003 implementation notes).
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    _force_joint(monkeypatch, significant=False)
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT)
+    first = {t.trial_id for t in store.read_trials("A")}
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT + 1)
+    every = {t.trial_id for t in store.read_trials("A")}
+    assert len(first) == N_A_CELLS and len(every) == 2 * N_A_CELLS
+
+
+def test_screen_params_ids_and_signs(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    _force_joint(monkeypatch, significant=False)
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT)
+    trials = {t.params["cell"]: t for t in _screen_trials(store)}
+    t = trials["A|violence|em|h20"]
+    assert t.params == {"cell": "A|violence|em|h20", "signal": "S3.violence", "group": "em",
+                        "horizon": 20, "period": "discovery",
+                        "features_version": FEATURES_VERSION, "expected_sign": -1.0,
+                        "recipe": "sm5_z.60", "n_boot": N_BOOT, "mean_block": 40.0,
+                        "seed": screen_cfg.seed, "members_hash": _members_hash(SCREEN_A["em"])}
+    assert t.trial_id == pl.trial_id("signal", "A", t.params, *SCREEN_DISC)
+    assert trials["A|quad1|dm|h5"].params["expected_sign"] == 1.0
+    assert trials["A|quad1|dm|h5"].params["members_hash"] == _members_hash(SCREEN_A["dm"])
+    assert trials["A|quad1|commodity|h5"].params["expected_sign"] is None  # two-sided
+    note = json.loads(t.notes)
+    # embargo: an h = 20 discovery label must end by the last discovery day
+    assert note["feature_dates"][1] < SCREEN_DISC[1].isoformat()
+    assert note["n_days"] > 100 and note["t"] is not None and note["p"] is not None
+
+
+def test_screen_rerun_does_not_double_log(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    _force_joint(monkeypatch, significant=True,
+                 p_cell={"A|quad1|dm|h5": 0.001, "A|violence|em|h20": 0.001})
+    pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT)
+    first = sorted(t.trial_id for t in store.read_trials("A"))
+    out: list[str] = []
+    pl.screen(screen_cfg, store, "A", lambda: NOW + timedelta(days=1), out.append, n_boot=N_BOOT)
+    assert sorted(t.trial_id for t in store.read_trials("A")) == first
+    assert len(first) == N_A_CELLS + 2
+    assert f"0 new trial(s) logged ({N_A_CELLS + 2} already logged)" in out[-1]
+
+
+def test_screen_confirms_only_discovered_cells(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    found = {"A|quad1|dm|h5", "A|violence|em|h20"}
+    _force_joint(monkeypatch, significant=True, p_cell=dict.fromkeys(found, 0.001))
+    seen = {}
+    real = pl.screen_stats.confirm
+
+    def spy(discovered, ic_conf, *rest):
+        seen["cells"] = set(discovered)
+        seen["ic_dates"] = {c: (s.index.min(), s.index.max()) for c, s in ic_conf.items()}
+        return real(discovered, ic_conf, *rest)
+
+    monkeypatch.setattr(pl.screen_stats, "confirm", spy)
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=N_BOOT) == pl.OK
+    assert seen["cells"] == found
+    for lo, hi in seen["ic_dates"].values():  # confirmation IC only on confirmation dates
+        assert lo >= pd.Timestamp(SCREEN_CONF[0]) and hi <= pd.Timestamp(SCREEN_CONF[1])
+    conf = _screen_trials(store, "confirmation")
+    assert {t.params["cell"] for t in conf} == found
+    assert all((t.data_start, t.data_end) == SCREEN_CONF for t in conf)
+    disc = {t.params["cell"]: t for t in _screen_trials(store, "discovery")}
+    assert len(disc) == N_A_CELLS
+    for t in conf:
+        note = json.loads(t.notes)
+        assert note["discovery_trial"] == disc[t.params["cell"]].trial_id
+        assert {"t", "p_one_sided", "holm_reject", "confirmed", "reason"} <= set(note)
+        # every screen trial carries the bootstrap settings and the members hash
+        d = disc[t.params["cell"]].params
+        assert {k: t.params[k] for k in ("n_boot", "mean_block", "seed", "members_hash")} == {
+            k: d[k] for k in ("n_boot", "mean_block", "seed", "members_hash")}
+    for c, t in disc.items():
+        note = json.loads(t.notes)
+        assert note["discovered"] is (c in found)
+        # EB ran because the joint test passed; thin (commodity) cells are not pooled
+        assert (note["shrunk_ic"] is not None) is ("|commodity|" not in c)
+    assert any("2 discovered" in line for line in out)
+
+
+def test_screen_never_reads_holdout(screen_cfg, monkeypatch):
+    inner = SqliteStore(screen_cfg.db_path)
+    inner.init()
+    _screen_track_a(inner)
+    assert not inner.read_prices(None, SCREEN_HOLDOUT, None).empty  # hold-out rows exist
+    store = RecordingStore(inner)
+    seen_dates = []
+    real_ic = pl.screen_stats.cell_ic
+
+    def spy_ic(signal, labels, *a, **k):
+        seen_dates.extend([signal["date"].max(), labels["date"].max()])
+        return real_ic(signal, labels, *a, **k)
+
+    monkeypatch.setattr(pl.screen_stats, "cell_ic", spy_ic)
+    _force_joint(monkeypatch, significant=True, p_cell={"A|quad3|em|h5": 0.001})
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT) == pl.OK
+    assert store.reads, "no dated read recorded"
+    for _, start, end in store.reads:
+        assert end is not None and end <= SCREEN_HOLDOUT
+    assert max(d for d in seen_dates if pd.notna(d)) < pd.Timestamp(SCREEN_HOLDOUT)
+    assert all(t.data_end < SCREEN_HOLDOUT for t in inner.read_trials("A"))
+
+
+def test_screen_refuses_periods_reaching_the_holdout(screen_cfg, store, monkeypatch):
+    monkeypatch.setattr(pl, "SCREEN_CONFIRMATION", (SCREEN_CONF[0], SCREEN_HOLDOUT))
+    rc = pl.screen(screen_cfg, store, "A", lambda: NOW, _silent, n_boot=N_BOOT)
+    assert rc == pl.REFUSED
+
+
+def test_screen_reuses_stored_labels(screen_cfg, monkeypatch):
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    _screen_track_a(store)
+    prices = store.read_prices(None, screen_cfg.start, SCREEN_HOLDOUT)
+    store.replace_labels(pl.labels.make_labels(prices, [1, 5, 20], pl._trading_days(prices)))
+    monkeypatch.setattr(pl.labels, "make_labels", lambda *a, **k: pytest.fail("rebuilt labels"))
+    _force_joint(monkeypatch, significant=False)
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "A", lambda: NOW, out.append, n_boot=N_BOOT) == pl.OK
+    assert "labels: stored dev labels reused" in out
+
+
+def test_screen_track_b_real_joint_test(screen_cfg):
+    # GICS sectors as groups; a 2-name sector keeps its cells, logged as "insufficient names".
+    # No forced p-values: the real bootstrap runs end to end on gkg org rows.
+    store = SqliteStore(screen_cfg.db_path)
+    store.init()
+    sectors = {"Energy": 5, "Utilities": 5, "Materials": 2}
+    assets = [Asset(ticker=f"{s[:2].upper()}{i}", name=f"{s} {i}", kind="stock", track="B",
+                    group="sp500", org_aliases=[f"{s.lower()} co {i}"], screen_group=s)
+              for s, k in sectors.items() for i in range(k)]
+    store.upsert_assets(assets)
+    store.upsert_prices(_bars([a.ticker for a in assets], *SCREEN_DATA, seed=5), "yfinance")
+    rng = np.random.default_rng(6)
+    rows = []
+    for d in pd.date_range(*SCREEN_DATA, freq="D"):
+        total = float(rng.integers(50_000, 60_000))
+        for a in assets:
+            k = float(rng.integers(1, 40))
+            rows += [(d, "gkg", a.org_aliases[0], "org_docs", k, int(total)),
+                     (d, "gkg", a.org_aliases[0], "org_tone", float(rng.normal(-1, 2)) * k, int(k)),
+                     (d, "gkg", a.org_aliases[0], "org_neg_docs", float(rng.integers(0, k + 1)),
+                      int(k))]
+    store.upsert_gdelt_daily(pd.DataFrame(rows, columns=GDELT_DAILY_COLUMNS), "gkg_orgs_daily")
+    out: list[str] = []
+    assert pl.screen(screen_cfg, store, "B", lambda: NOW, out.append, n_boot=N_BOOT) == pl.OK
+    disc = [t for t in store.read_trials("B", "signal") if t.params["period"] == "discovery"]
+    assert len(disc) == 3 * 3 * 2
+    assert {t.params["group"] for t in disc} == {"Energy", "Utilities", "Materials"}
+    assert {t.params["signal"]: t.params["expected_sign"] for t in disc} == {
+        "S3.org_docs": None, "S3.org_neg_docs": -1.0, "S3.org_tone": 1.0}
+    for t in disc:
+        note = json.loads(t.notes)
+        thin = t.params["group"] == "Materials"
+        assert (note.get("note") == "insufficient names") is thin
+        assert (note["p"] is None) is thin
+    assert any("insufficient names" in line and "6 cell(s)" in line for line in out)
+
+
+EMBARGO_CASES = [
+    # (trading days, period end, horizon) -> last feature date whose label ends by `end`
+    (pd.bdate_range("2019-12-02", "2020-01-10"), date(2019, 12, 31), 5, date(2019, 12, 23)),
+    (pd.bdate_range("2019-12-02", "2020-01-10"), date(2019, 12, 31), 1, date(2019, 12, 27)),
+    # end on a non-trading day: the last trading day before it is the label's last open
+    (pd.bdate_range("2019-12-02", "2020-01-10"), date(2019, 12, 29), 1, date(2019, 12, 25)),
+]
+
+
+@pytest.mark.parametrize("days,end,h,expected", EMBARGO_CASES)
+def test_embargoed_end(days, end, h, expected):
+    tdays = [d.date() for d in days]
+    got = pl._embargoed_end(tdays, end, h)
+    assert got == expected
+    # the label of the returned date ends by `end`; the next date's label does not
+    i = tdays.index(got)
+    assert tdays[i + 1 + h] <= end < tdays[i + 2 + h]
+
+
+JOINT_CASES = [
+    # Bonferroni over the two statistics: min(p_S, p_M) < 0.025
+    (0.024, 0.9, True),
+    (0.9, 0.0249, True),
+    (0.025, 0.025, False),
+    (0.04, 0.04, False),  # both under 5% individually is not enough
+    (float("nan"), 0.01, True),
+    (float("nan"), float("nan"), False),
+]
+
+
+@pytest.mark.parametrize("p_s,p_m,expected", JOINT_CASES)
+def test_joint_significant(p_s, p_m, expected):
+    assert pl._joint_significant(p_s, p_m) is expected
 
 
 def test_trial_id_is_deterministic():

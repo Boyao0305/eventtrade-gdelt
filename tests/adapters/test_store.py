@@ -175,6 +175,72 @@ def test_assets_round_trip_and_track_filter(store: SqliteStore) -> None:
     assert store.read_assets("A")[0].name == "iShares Japan"
 
 
+def test_assets_screen_group_round_trip_and_overwrite(store: SqliteStore) -> None:
+    a = Asset(ticker="EWJ", name="Japan", kind="etf", track="A", group="country",
+              screen_group="dm")
+    b = Asset(ticker="AAPL", name="Apple", kind="stock", track="B", group="sp500",
+              screen_group="Information Technology")
+    c = Asset(ticker="SPY", name="SPDR", kind="etf", track="A", group="market")
+    store.upsert_assets([a, b, c])
+    assert {x.ticker: x.screen_group for x in store.read_assets()} == {
+        "AAPL": "Information Technology", "EWJ": "dm", "SPY": None}
+    # an upsert overwrites the group, including back to None
+    store.upsert_assets([a.model_copy(update={"screen_group": "em"}),
+                         b.model_copy(update={"screen_group": None})])
+    assert {x.ticker: x.screen_group for x in store.read_assets()} == {
+        "AAPL": None, "EWJ": "em", "SPY": None}
+
+
+# The assets table as created before ADR 0003 (no screen_group column). The live db has it.
+_OLD_ASSETS_DDL = """
+CREATE TABLE assets (
+    ticker         TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    kind           TEXT NOT NULL CHECK (kind IN ('etf', 'stock')),
+    track          TEXT NOT NULL CHECK (track IN ('A', 'B')),
+    grp            TEXT NOT NULL,
+    fips_countries TEXT NOT NULL,
+    gkg_themes     TEXT NOT NULL,
+    org_aliases    TEXT NOT NULL,
+    first_trade    TEXT
+);
+INSERT INTO assets VALUES ('EWJ', 'Japan', 'etf', 'A', 'country', '["JA"]', '[]', '[]',
+                           '1996-03-18');
+"""
+
+
+def _asset_columns(path: Path) -> list[str]:
+    conn = sqlite3.connect(path)
+    try:
+        return [r[1] for r in conn.execute("PRAGMA table_info(assets)")]
+    finally:
+        conn.close()
+
+
+def test_init_migrates_old_assets_table_keeping_rows(tmp_path: Path) -> None:
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(_OLD_ASSETS_DDL)
+    conn.close()
+    assert "screen_group" not in _asset_columns(path)
+
+    store = SqliteStore(path)
+    store.init()
+    assert _asset_columns(path)[-1] == "screen_group"
+    (a,) = store.read_assets()
+    assert (a.ticker, a.fips_countries, a.first_trade, a.screen_group) == (
+        "EWJ", ["JA"], date(1996, 3, 18), None)
+
+    store.init()  # idempotent: no second ALTER, no error
+    assert _asset_columns(path).count("screen_group") == 1
+    store.upsert_assets([a.model_copy(update={"screen_group": "dm"})])
+    assert store.read_assets()[0].screen_group == "dm"
+
+
+def test_fresh_db_has_screen_group_column(store: SqliteStore) -> None:
+    assert "screen_group" in _asset_columns(store.path)
+
+
 def test_delete_assets_removes_only_named_tickers(store: SqliteStore) -> None:
     a = Asset(ticker="GOOG", name="Alphabet Inc. (Class C)", kind="stock", track="B",
               group="sp500")

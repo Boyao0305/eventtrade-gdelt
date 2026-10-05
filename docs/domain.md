@@ -24,6 +24,14 @@ organisation aliases).
 | **IC** | Daily cross-sectional Spearman correlation between a feature and a label over the names present that day. |
 | **Gate 1/2/3/4** | ADR 0001: signal gate (\|NW t\| >= 3, sign held in 2 of 3 sub-periods, spread beats costs); model gate; overfitting gate (DSR >= 0.95, PBO < 0.5); hold-out (bootstrap CI excludes 0). ADR 0002 amends gate 1: the observed IC sign must equal the pre-registered sign (H0 has none and accepts either), and cost = 4 x per-leg cost x min(1, h x turnover). |
 | **Pre-registered sign** | `_Family.sign` in `cli/pipelines.py`, written before any data was seen: A1 conflict counts -1, Goldstein +1, A2/A3 +1, B1 +1, B2 -1, H0 None. `backtest` refuses a feature with no sign unless `--sign` is given. |
+| **Screen (S3)** | ADR 0003's pre-registered sub-category screen, run by `eventtrade screen`. Hypothesis id `S3`; its trials are stage `signal` and count in the DSR N like every other trial. |
+| **Screen group** | `Asset.screen_group`, filled by `load-universe`. Track A: `dm` / `em` country ETFs by MSCI class as of 2015-03-02, the start of the dev period, not at each fund's inception (Israel DM, Greece EM; Qatar and UAE EM; Argentina and Vietnam frontier and Saudi Arabia standalone on that date, all counted as `em`), `commodity` for commodity ETFs + XLE, empty for everything else (SPY, rates, other sectors). Track B: the stock's GICS sector from the Wikipedia index table (today's sector, not point-in-time). |
+| **Screen signal** | `S3.<name>`: the `sm5_z.60` of one family's `mean` stat, built in memory by `core/screen_features` and never stored. Track A families quad1..quad4, root_14 (protest), root_163 (sanctions), violence (roots 18 + 19 + 20 summed before dividing by n_events); Track B org_docs, org_neg_docs, org_tone. |
+| **Cell** | signal x screen group x horizon (5 or 20), id `<track>\|<signal>\|<group>\|h<h>`, e.g. `A\|violence\|em\|h20`. 42 in Track A, 66 in Track B. Every pre-registered cell counts: a cell whose IC (>= 5 names with a signal and a label) exists on fewer than half of its discovery days keeps its place, gets p = NaN, counts in BH's m, is never discovered, is left out of the joint test and EB, and is logged as a trial noting "insufficient names". |
+| **Screen trial identity** | A screen trial's params include `n_boot`, `mean_block`, `seed` and `members_hash` (first 16 hex digits of the sha256 of the cell's sorted tickers joined by `,`), so a rerun with any other bootstrap setting or membership is a new, counted trial. `n_boot` must be >= 999. |
+| **Discovery / confirmation** | Discovery = feature dates 2015-03-02..2019-12-31, minus an embargo: a horizon-h cell stops at the last date whose label (open t+1 -> open t+1+h) ends by 2019-12-31. Confirmation = 2020-01-01..2025-03-31, discovered cells only, each tested once. Both are dev data; the hold-out is never read. |
+| **Joint test** | Per track on discovery data: z = registered sign x NW t (\|t\| for a two-sided cell), S = sum of max(z, 0)^2, M = max z; null from a studentised stationary block bootstrap of dates shared by all cells (mean block 40, seed = config seed). Significant when min(p_S, p_M) < 0.025 (Bonferroni over the two statistics). Not significant: the track stops after logging its discovery trials. |
+| **Shrunk IC** | Empirical-Bayes normal-normal posterior of a cell's mean IC in its direction (registered sign, or the discovery-t sign of a two-sided cell), method-of-moments tau^2 across the track's cells, pooled toward their mean. |
 | **A4 vol gate (v2)** | Label = ln(realised vol over t+1..t+h / realised vol over t-21..t). IC = Spearman of the residuals of feature and label after a per-day cross-sectional OLS on ln rv5, ln rv22, ln rv60 and ln expanding long-run vol (all ending at t). Passes on \|NW t\| >= 3 with the expected sign held in 2 of 3 sub-periods, and only if the placebo (each ticker's expanding mean of its own earlier feature values) does not pass. Expected sign is "positive in shock units": +1 for A1 conflict counts, -1 for Goldstein (a shock is a low Goldstein). |
 
 ## Timing
@@ -163,5 +171,18 @@ map like its `fips_countries`. GKG tone is roughly -10..+10 (positive minus nega
 - **Turnover** in a backtest = mean daily sum |traded notional| / pre-trade value, so fee drag is
   about cost_bps x turnover; in a signal report it is the share of the top/bottom quantile sets
   replaced per day.
+- **The screen's joint test is directional.** z = sign x t for a signed cell, |t| for a
+  two-sided one; S = sum max(z, 0)^2, M = max z; the track passes if min(p_S, p_M) < 0.025
+  (Bonferroni over the two statistics, 5% overall). A cell moving against its registered sign
+  adds nothing.
+- **Screen shrinkage pools what the direction does not decide.** Signed cells pool sign x IC;
+  two-sided cells pool their signed IC unfolded (folding |IC| would bias the pooled mean
+  upward). The direction is applied after shrinkage: a two-sided cell's shrunk IC is its
+  posterior times the sign of its discovery t.
+- **Screen discoveries are BH at q = 0.10, then Holm at 5% on confirmation.** BH controls the
+  share of false discoveries among discovered cells, not the chance of any; the confirmation
+  period is what protects against a false positive reaching gate 2. Per-cell discovery p-values
+  come from the same bootstrap draws as the joint test; confirmation p-values are the one-sided
+  normal approximation of the HAC t.
 - **Purge = h** removes one more day than strictly needed: labels at t and s overlap only if
   |t - s| < h.

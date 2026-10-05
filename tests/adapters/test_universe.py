@@ -93,6 +93,70 @@ def test_country_fips_codes(ticker, fips):
     assert by[ticker].fips_countries == [fips]
 
 
+# --- ADR 0003 screen groups (Track A) ---------------------------------------------------------
+
+# MSCI market classification as of 2015-03-02, the start of the dev period (ADR 0003
+# implementation notes), not at each fund's inception; 'em' also holds markets that were
+# Frontier or Standalone on that date (no third country group in the pre-registered screen).
+# Sources: MSCI annual market classification reviews; reclassification history in the CSV's
+# msci_note column. Every ticker is listed so a CSV edit cannot silently move one.
+SCREEN_GROUP_CASES: dict[str, str | None] = {
+    # developed on 2015-03-02
+    "EWJ": "dm", "EWG": "dm", "EWU": "dm", "EWQ": "dm", "EWI": "dm", "EWP": "dm", "EWL": "dm",
+    "EWN": "dm", "EWD": "dm", "EWC": "dm", "EWA": "dm", "EWH": "dm", "EWS": "dm", "NORW": "dm",
+    "EIRL": "dm", "EWO": "dm", "EWK": "dm", "EDEN": "dm", "ENZL": "dm",
+    # Israel: MSCI moved it EM -> DM effective 2010-06, so DM on 2015-03-02
+    "EIS": "dm",
+    # emerging on 2015-03-02
+    "FXI": "em", "EWY": "em", "EWT": "em", "INDA": "em", "EWZ": "em", "EWW": "em", "EZA": "em",
+    "TUR": "em", "EIDO": "em", "THD": "em", "EWM": "em", "EPHE": "em", "EPOL": "em", "ECH": "em",
+    "EPU": "em",
+    # Greece: MSCI moved it DM -> EM effective 2013-11-27, so EM on 2015-03-02
+    "GREK": "em",
+    # Qatar and UAE: FM -> EM effective 2014-06-02, so EM on 2015-03-02
+    "QAT": "em", "UAE": "em",
+    # not DM, not EM on 2015-03-02 -> 'em' bucket: Argentina FM (2009-06 .. 2019-05),
+    # Vietnam FM, Saudi Arabia Standalone (EM from 2019)
+    "ARGT": "em", "VNM": "em", "KSA": "em",
+    # commodities and the energy sector ETF
+    "USO": "commodity", "UNG": "commodity", "GLD": "commodity", "SLV": "commodity",
+    "CPER": "commodity", "DBA": "commodity", "XLE": "commodity",
+    # not in any Track A screen group
+    "SPY": None, "TLT": None, "IEF": None, "SHY": None, "ITA": None, "XLF": None, "XLK": None,
+    "XLV": None, "XLI": None, "XLB": None, "XLP": None, "XLY": None, "XLU": None, "XLRE": None,
+    "XLC": None,
+}
+
+
+def test_screen_group_table_covers_the_universe():
+    assert {a.ticker for a in load_etf_universe()} == set(SCREEN_GROUP_CASES)
+
+
+@pytest.mark.parametrize(("ticker", "expected"), sorted(SCREEN_GROUP_CASES.items()))
+def test_etf_screen_group(ticker, expected):
+    by = {a.ticker: a for a in load_etf_universe()}
+    assert by[ticker].screen_group == expected
+
+
+def test_screen_groups_follow_asset_group():
+    for a in load_etf_universe():
+        if a.group == "country":
+            assert a.screen_group in {"dm", "em"}, a.ticker
+        elif a.group == "commodity" or a.ticker == "XLE":
+            assert a.screen_group == "commodity", a.ticker
+        else:
+            assert a.screen_group is None, a.ticker
+
+
+def test_screen_groups_have_at_least_five_names():
+    # ADR 0003: within-group daily rank IC needs >= 5 names per day.
+    counts: dict[str, int] = {}
+    for a in load_etf_universe():
+        if a.screen_group:
+            counts[a.screen_group] = counts.get(a.screen_group, 0) + 1
+    assert counts == {"dm": 20, "em": 21, "commodity": 7}
+
+
 # --- CSV parsing rules -----------------------------------------------------------------------
 
 @pytest.mark.parametrize("row, field, expected", [
@@ -109,6 +173,27 @@ def test_parse_universe_csv_rules(row, field, expected):
     header = "ticker,name,kind,track,group,fips_countries,gkg_themes,org_aliases,first_trade\n"
     (a,) = _parse_universe_csv(header + row + "\n")
     assert getattr(a, field) == expected
+    assert a.screen_group is None  # no screen_group column -> None
+
+
+@pytest.mark.parametrize(("cell", "expected"), [
+    ("dm", "dm"),
+    (" em ", "em"),          # whitespace stripped
+    ("commodity", "commodity"),
+    ("", None),              # empty -> None
+    ("  ", None),
+])
+def test_parse_universe_csv_screen_group(cell, expected):
+    header = ("ticker,name,kind,track,group,fips_countries,gkg_themes,org_aliases,first_trade,"
+              "screen_group,msci_note\n")
+    (a,) = _parse_universe_csv(header + f'X,n,etf,A,country,JA,,,,{cell},"free text; ignored"\n')
+    assert a.screen_group == expected
+
+
+def test_parse_universe_csv_rejects_unknown_screen_group():
+    header = "ticker,name,kind,track,group,fips_countries,gkg_themes,org_aliases,first_trade,screen_group\n"
+    with pytest.raises(ValueError, match="screen_group"):
+        _parse_universe_csv(header + "X,n,etf,A,country,JA,,,,DM\n")
 
 
 # --- Wikipedia index pages -------------------------------------------------------------------
@@ -121,12 +206,53 @@ def test_parse_sp500_fixture():
     assert by["MMM"].name == "3M"
     assert all(a.kind == "stock" and a.track == "B" and a.group == "sp500" for a in assets)
     assert all(a.org_aliases == [] and a.fips_countries == [] for a in assets)
+    # ADR 0003 Track B groups: the 'GICS Sector' column
+    assert {t: a.screen_group for t, a in by.items()} == {
+        "MMM": "Industrials", "AOS": "Industrials", "BRK-B": "Financials",
+        "BF-B": "Consumer Staples"}
 
 
 def test_parse_sp400_uses_constituents_not_changes_table():
     assets = _parse_index_html((FIX / "universe_sp400.html").read_text(encoding="utf-8"), "sp400")
     assert [a.ticker for a in assets] == ["AA", "AAL", "AAON"]
     assert {a.group for a in assets} == {"sp400"}
+    assert [a.screen_group for a in assets] == ["Materials", "Industrials", "Industrials"]
+
+
+# The 11 GICS sectors as Wikipedia spells them (live pages, 2026-10-05: sp500 and sp400 both
+# show exactly these 11). A value outside the set means GICS or the page changed: fail loudly
+# rather than invent a 12th screen group.
+@pytest.mark.parametrize(("sector", "expected"), [
+    ("Information Technology", "Information Technology"),
+    ("Communication Services", "Communication Services"),
+    ("Real Estate", "Real Estate"),
+    (" Health Care ", "Health Care"),        # whitespace stripped
+    ("Telecommunication Services", ValueError),  # pre-2018 GICS name
+    ("Tech", ValueError),
+    ("", ValueError),
+])
+def test_gics_sector_validation(sector, expected):
+    html = _constituents_html([("AAPL", "Apple Inc.", sector)])
+    if expected is ValueError:
+        with pytest.raises(ValueError, match="GICS"):
+            _parse_index_html(html, "sp500")
+    else:
+        (a,) = _parse_index_html(html, "sp500")
+        assert a.screen_group == expected
+
+
+def test_missing_gics_sector_column_is_an_error():
+    html = ('<html><body><table id="constituents"><tr><th>Symbol</th><th>Security</th></tr>'
+            "<tr><td>AAPL</td><td>Apple</td></tr></table></body></html>")
+    with pytest.raises(ValueError, match="GICS Sector"):
+        _parse_index_html(html, "sp500")
+
+
+def test_share_class_dedup_keeps_sector():
+    rows = [("GOOGL", "Alphabet Inc. (Class A)", "Communication Services"),
+            ("GOOG", "Alphabet Inc. (Class C)", "Communication Services")]
+    (a,) = _one_share_class(_parse_index_html(_constituents_html(rows), "sp500"))
+    assert (a.ticker, a.screen_group) == ("GOOGL", "Communication Services")
 
 
 class _Resp:
@@ -176,10 +302,13 @@ def test_one_share_class(listings, kept):
     assert [a.ticker for a in out] == sorted(a.ticker for a in out)
 
 
-def _constituents_html(rows: list[tuple[str, str]]) -> str:
-    body = "".join(f"<tr><td>{t}</td><td>{n}</td></tr>" for t, n in rows)
-    return ('<html><body><table id="constituents"><tr><th>Symbol</th><th>Security</th></tr>'
-            f"{body}</table></body></html>")
+def _constituents_html(rows: list[tuple[str, ...]]) -> str:
+    """(ticker, name[, sector]) rows; sector defaults to Industrials."""
+    body = "".join(
+        f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2] if len(r) > 2 else 'Industrials'}</td></tr>"
+        for r in rows)
+    return ('<html><body><table id="constituents"><tr><th>Symbol</th><th>Security</th>'
+            f"<th>GICS Sector</th></tr>{body}</table></body></html>")
 
 
 def test_fetch_index_members_keeps_one_share_class(monkeypatch):
@@ -203,6 +332,7 @@ def test_fetch_index_members_unknown_index():
 def test_fetch_index_members_live(index, lo, hi):
     assets = fetch_index_members(index)
     assert lo <= len(assets) <= hi
+    assert len({a.screen_group for a in assets}) == 11
 
 
 @pytest.mark.slow

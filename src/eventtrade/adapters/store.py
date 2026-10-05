@@ -14,8 +14,10 @@ Tables (no schema.sql; convention §0.3):
     PK (session_date, source, entity, metric). pulled_at/query_name = vintage of the last pull.
 - prices(date, ticker, open, high, low, close, volume, adj_open, adj_close, source, fetched_at)
     PK (date, ticker). source in ('yfinance', 'stooq').
-- assets(ticker, name, kind, track, grp, fips_countries, gkg_themes, org_aliases, first_trade)
+- assets(ticker, name, kind, track, grp, fips_countries, gkg_themes, org_aliases, first_trade,
+         screen_group)
     PK ticker. List fields are JSON arrays. ``grp`` holds Asset.group (GROUP is an SQL keyword).
+    screen_group (nullable, ADR 0003) was added later; ``init`` adds it to older files.
 - features(date, ticker, feature, value)                         PK (date, ticker, feature)
 - labels(date, ticker, horizon, ret_oo, ret_overnight, ret_intraday)  PK (date, ticker, horizon)
 - trials(trial_id, created_at, track, stage, hypothesis, params, data_start, data_end, stats, notes)
@@ -88,7 +90,8 @@ CREATE TABLE IF NOT EXISTS assets (
     fips_countries TEXT NOT NULL,
     gkg_themes     TEXT NOT NULL,
     org_aliases    TEXT NOT NULL,
-    first_trade    TEXT
+    first_trade    TEXT,
+    screen_group   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS features (
@@ -150,6 +153,12 @@ CREATE TABLE IF NOT EXISTS bq_usage (
 CREATE INDEX IF NOT EXISTS bq_usage_ran_at ON bq_usage (ran_at);
 """
 
+# Columns added after the first release, as (table, column, declaration). Files created earlier
+# get them via ALTER TABLE ... ADD COLUMN in init(); fresh files already have them from _DDL.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("assets", "screen_group", "TEXT"),  # ADR 0003
+)
+
 # table -> (date column for min/max in status(), or None)
 _STATUS_TABLES: dict[str, str | None] = {
     "gdelt_daily": "session_date",
@@ -172,11 +181,16 @@ class SqliteStore:
     # --- lifecycle --------------------------------------------------------------------------
 
     def init(self) -> None:
-        """Create the file, tables, indexes and triggers if missing; switch to WAL. Idempotent."""
+        """Create the file, tables, indexes and triggers if missing; switch to WAL; add columns
+        introduced after a file was created (_ADDED_COLUMNS). Idempotent."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_DDL)
+            for table, column, decl in _ADDED_COLUMNS:
+                have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+                if column not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     # --- gdelt_daily ------------------------------------------------------------------------
 
@@ -299,16 +313,18 @@ class SqliteStore:
                 json.dumps(a.gkg_themes),
                 json.dumps(a.org_aliases),
                 a.first_trade.isoformat() if a.first_trade else None,
+                a.screen_group,
             )
             for a in assets
         ]
         sql = (
             "INSERT INTO assets (ticker, name, kind, track, grp, fips_countries, gkg_themes,"
-            " org_aliases, first_trade) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " org_aliases, first_trade, screen_group) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (ticker) DO UPDATE SET name = excluded.name, kind = excluded.kind,"
             " track = excluded.track, grp = excluded.grp,"
             " fips_countries = excluded.fips_countries, gkg_themes = excluded.gkg_themes,"
-            " org_aliases = excluded.org_aliases, first_trade = excluded.first_trade"
+            " org_aliases = excluded.org_aliases, first_trade = excluded.first_trade,"
+            " screen_group = excluded.screen_group"
         )
         return self._executemany(sql, rows, len(rows))
 
@@ -329,7 +345,7 @@ class SqliteStore:
         with self._conn() as conn:
             cur = conn.execute(
                 "SELECT ticker, name, kind, track, grp, fips_countries, gkg_themes, org_aliases,"
-                f" first_trade FROM assets{_where(where)} ORDER BY ticker",
+                f" first_trade, screen_group FROM assets{_where(where)} ORDER BY ticker",
                 params,
             )
             return [
@@ -343,6 +359,7 @@ class SqliteStore:
                     gkg_themes=json.loads(r[6]),
                     org_aliases=json.loads(r[7]),
                     first_trade=date.fromisoformat(r[8]) if r[8] else None,
+                    screen_group=r[9],
                 )
                 for r in cur.fetchall()
             ]

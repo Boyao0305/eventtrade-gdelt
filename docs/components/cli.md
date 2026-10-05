@@ -17,7 +17,12 @@ flowchart TD
     pipelines --> models[core/models.py]
     pipelines --> simulate[core/simulate.py]
     pipelines --> overfit[core/overfit.py]
+    pipelines --> screen_features[core/screen_features.py]
+    pipelines --> screen[core/screen.py]
     pipelines --> schemas[schemas.py]
+    screen_features --> features
+    screen --> evaluate
+    screen --> overfit
     features --> schemas
     labels --> schemas
     evaluate --> schemas
@@ -52,6 +57,7 @@ flowchart LR
     end
     subgraph select[Select]
         evaluate["core/evaluate<br/><i>signal-study</i>"]
+        screen["core/screen_features + core/screen<br/><i>screen</i>"]
     end
     subgraph bt[Backtest output]
         models["core/models + core/cv<br/><i>backtest</i>"]
@@ -68,6 +74,7 @@ flowchart LR
     db -->|GDELT_DAILY + assets| features -->|FEATURE_COLUMNS| db
     db -->|prices| labels -->|LABEL_COLUMNS| db
     db -->|features + labels| evaluate -->|signal Trial| db
+    db -->|GDELT_DAILY, prices, labels, assets.screen_group| screen -->|S3 signal Trials| db
     db -->|features, labels, prices| models -->|WEIGHT_COLUMNS| simulate
     simulate -->|backtest Trial + TRIAL_RETURN_COLUMNS| db
     db -->|trial returns| overfit
@@ -76,6 +83,7 @@ flowchart LR
 | Output | Takes | Needs | Produces | Acted on by |
 |---|---|---|---|---|
 | Signal trials | every stored feature of a track x horizons 1, 5, 20 (`sm5` features: 5, 20); Track A's A1 features also through the A4 vol gate | features (v2), labels, prices (dev) | `trials` rows, stage `signal`, params with `features_version` and `expected_sign`, gate 1 verdict in `notes` (JSON) | the researcher choosing what to backtest; N in gate 3's DSR (v1 and v2 trials both count) |
+| Screen trials (ADR 0003) | S3 signals built in memory x asset groups (`screen_group`) x h 5, 20; every cell kept: cells with fewer than 5 names on most discovery days get p = NaN (in BH's m, never discovered) and the note "insufficient names" | GDELT daily rows, prices, labels (stored dev labels if complete, else built), assets with `screen_group` (dev) | one `signal` trial per cell for discovery 2015-03-02..2019-12-31, and per discovered cell for confirmation 2020-01-01..2025-03-31; hypothesis `S3`, params `cell, signal, group, horizon, period, features_version, expected_sign, recipe, n_boot, mean_block, seed, members_hash`; notes with IC, t, p, shrunk IC, joint-test result; printed table | the researcher (confirmed cells go to gate 2 as a combined portfolio); N in gate 3's DSR |
 | Backtest trials | one rule feature, or one model (inputs chosen per fold on training-date IC) | features, labels, prices (dev) | `trials` row with `BacktestStats` + `trial_returns` rows | `overfit-report` |
 | Overfitting report | every backtest trial of a track | trial returns | printed DSR, PBO, CI, gate 3 verdict | the researcher deciding what reaches the hold-out |
 | Hold-out trial | one rule backtest trial, once | hold-out prices and GDELT, pulled by the command | `trials` row stage `holdout` + returns; gate 4 verdict | final decision / paper trading |
@@ -99,6 +107,7 @@ callables `FetchPrices`, `SanityCheck`, `FetchIndex`, `LoadEtfs`. Exit-code cons
 - `build_dataset(cfg: Config, store: Store, track: Track, echo: Echo = print) -> int` — features and labels for one track.
 - `hypothesis_of(track: Track, feature: str) -> tuple[str, float | None]` — pre-registered hypothesis and sign of a feature name (sign None for H0 and unknown names `'?'`); names are matched through `features.feature_name`.
 - `signal_study(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print) -> int` — gate 1 over every feature x horizon with the registered sign, plus A4 (Track A), logged as trials; MISSING and nothing logged when no sm5 feature is stored (a v1 build).
+- `screen(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print, n_boot: int = 2000) -> int` — ADR 0003 screen: discovery IC per cell (labels embargoed to end inside the discovery window), joint bootstrap test over the cells with enough names (seed `cfg.seed`, mean block 40, significant when min(p_S, p_M) < 0.025; otherwise stop), EB shrinkage (`shrink_directional`), BH q = 0.10 over every cell (thin cells p = NaN), confirmation of discovered cells only (Holm 5%, cost-adjusted spread). Every cell x period logged as an S3 `signal` trial whose id covers n_boot, mean block, seed and the members hash. REFUSED if n_boot < 999 or a screen period reaches the hold-out; MISSING if no asset has `screen_group`. Constants `SCREEN_DISCOVERY`, `SCREEN_CONFIRMATION`, `SCREEN_HORIZONS`, `SCREEN_MIN_NAMES`, `SCREEN_BH_Q`, `SCREEN_HOLM_ALPHA`, `SCREEN_JOINT_ALPHA`, `SCREEN_JOINT_RULE`, `SCREEN_MEAN_BLOCK`, `SCREEN_MIN_N_BOOT`, `SCREEN_THIN_NOTE`.
 - `backtest(cfg: Config, store: Store, track: Track, now: Clock, feature: str | None = None, sign: float | None = None, model: Literal["ridge", "logistic", "lgbm"] | None = None, model_features: list[str] | None = None, horizon: int = 5, rebalance: int | None = None, echo: Echo = print) -> int` — rule or walk-forward model backtest, logged with returns; REFUSED for a feature with no registered sign unless `sign` is given.
 - `overfit_report(cfg: Config, store: Store, track: Track, echo: Echo = print) -> int` — gate 3.
 - `holdout(cfg: Config, store: Store, track: Track, source_trial: str, confirmed: bool, gdelt: GdeltSource | None, fetch: FetchPrices, execute: bool, now: Clock, budget_error: type[Exception] = RuntimeError, echo: Echo = print) -> int` — gate 4, once per trial.
@@ -109,6 +118,7 @@ callables `FetchPrices`, `SanityCheck`, `FetchIndex`, `LoadEtfs`. Exit-code cons
   (`start <= date < end`); `trials`/`trial_returns` are append-only (triggers). Full method list in
   the module docstring; `gdelt_session_dates(query_name, start, end) -> list[date]` backs resumable ingest;
   `delete_assets(tickers: Sequence[str]) -> int` backs `load_universe`'s replacement of a track.
+  `init` adds the nullable `assets.screen_group` column to older files (idempotent).
 
 ### adapters/gdelt_bq.py — shared
 - `GdeltBigQuery(client: Any, usage: UsageLog, max_bytes_per_query: int, monthly_budget_bytes: int, now: Callable[[], datetime], lookback_days: int = 30, queries_dir: Path = QUERIES_DIR)` — satisfies `GdeltSource`; dry run, budget check, `maximum_bytes_billed`, usage log on every query.
@@ -121,7 +131,8 @@ callables `FetchPrices`, `SanityCheck`, `FetchIndex`, `LoadEtfs`. Exit-code cons
 - `fetch_stooq(...)`, `cross_check(...)`, `sanity_check(prices: pd.DataFrame, *, max_gap: int = 5, max_abs_ret: float = 0.40) -> pd.DataFrame` — second source (currently blocked) and data flags.
 
 ### adapters/universe.py — shared
-- `load_etf_universe() -> list[Asset]` — Track A from the packaged CSV.
+- `load_etf_universe() -> list[Asset]` — Track A from the packaged CSV, including the ADR 0003 `screen_group` column (`msci_note` is documentation only).
+- `GICS_SECTORS: frozenset[str]` — the 11 sector names; `fetch_index_members` stores each stock's GICS sector as `screen_group` and rejects any other value.
 - `fetch_index_members(index: Literal["sp500", "sp400"], *, get=requests.get, timeout: float = 30.0) -> list[Asset]` — current members from Wikipedia, one share class per company (GOOGL, FOXA, NWSA preferred; otherwise the alphabetically first ticker).
 
 ### core/aliases.py — shared
@@ -153,6 +164,21 @@ Constants: `FEATURES_VERSION` (2), `LR_PSEUDO_COUNT`, `Z_STD_FLOOR`, `Z_CLIP`, `
 - `partial_ic(feature, label, controls, horizon: int, min_names: int = 5, label_col: str = "value") -> pd.Series` — daily Spearman IC of residuals after per-day OLS on the controls.
 - `placebo_feature(feature: pd.DataFrame) -> pd.DataFrame` — each ticker's expanding mean of its own earlier values.
 - `vol_gate(feature, label, controls, horizon: int, *, expected_sign: float = 1.0, min_names: int = 5) -> VolGateResult` — A4 v2 gate: the feature passes and its placebo does not; `.notes()` is the trial's notes JSON.
+
+### core/screen_features.py — shared
+Constants `GROUPS_A` (`dm`, `em`, `commodity`), `ANY_GROUP`, `FEATURE_PREFIX` (`S3.`), `SCREEN_WINDOW` (60), `SCREEN_MIN_PERIODS` (20); families `SCREEN_FAMILIES_A`, `SCREEN_SIGNALS_B` with their per-group signs.
+- `screen_signals(gdelt_daily: pd.DataFrame, trading_days: list[date], assets: list[Asset], track: Track) -> pd.DataFrame` — FEATURE_COLUMNS, `S3.<name>`, each the `sm5_z.60` of the family's `mean` stat, via `features.build_features`.
+- `screen_inputs(gdelt_daily: pd.DataFrame, track: Track) -> pd.DataFrame` — the families' raw rows; `violence` = roots 18 + 19 + 20 summed per key with n = the common n_events.
+- `screen_families(track: Track) -> tuple[ScreenSignal, ...]`, `screen_specs(track: Track) -> list[MetricSpec]`; `ScreenSignal.sign(group) -> float | None`.
+
+### core/screen.py — shared
+- `cell_ic(signal, labels, members, horizon: int, start, end, min_names: int = 5) -> pd.Series` — within-group daily Spearman IC, feature dates inclusive.
+- `cell_estimate(ic: pd.Series, horizon: int) -> tuple[float, float]` — mean IC and HAC standard error.
+- `joint_test(ic_by_cell, horizon_of, signs, n_boot: int, mean_block: float, seed: int) -> JointResult` — S = sum max(z, 0)^2, M = max z (z = sign x t, or |t| without a sign), studentised stationary block bootstrap of dates shared by all cells; per-cell bootstrap p.
+- `eb_shrink(estimates, std_errors, prior_mean: float | None = None) -> EbResult` — normal-normal, method-of-moments tau^2.
+- `shrink_directional(estimates, std_errors, signs, discovery_t) -> tuple[EbResult, dict]` — pools sign x IC (signed cells) and the unfolded IC (two-sided cells), then applies each cell's direction to its posterior.
+- `benjamini_hochberg(pvals, q: float) -> set`, `holm(pvals, alpha: float) -> set`.
+- `confirm(discovered, ic_conf, signs, spreads, turnovers, cost_bps: float, horizon_of, discovery_t=None, alpha: float = 0.05) -> ConfirmResult` — ADR 0003 step 5.
 
 ### core/cv.py — shared
 - `purged_splits(dates, n_folds: int, n_test_folds: int, purge: int, embargo: int) -> list[Split]` — CPCV.

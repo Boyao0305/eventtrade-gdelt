@@ -61,6 +61,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return pipelines.build_dataset(cfg, store, args.track)
     if cmd == "signal-study":
         return pipelines.signal_study(cfg, store, args.track, now)
+    if cmd == "screen":
+        return pipelines.screen(cfg, store, args.track, now, n_boot=args.n_boot)
     if cmd == "backtest":
         return pipelines.backtest(cfg, store, args.track, now, feature=args.feature,
                                   sign=args.sign, model=args.model, model_features=args.features,
@@ -112,6 +114,12 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("signal-study", help="evaluate every feature x horizon, log trials, gate 1")
     s.add_argument("--track", choices=("A", "B"), required=True)
+
+    s = sub.add_parser("screen", help="ADR 0003 sub-category screen of one track; logs trials")
+    s.add_argument("--track", choices=("A", "B"), required=True)
+    s.add_argument("--n-boot", type=_screen_n_boot, default=2000, dest="n_boot",
+                   help="stationary-bootstrap draws for the joint test (2000; at least"
+                        f" {pipelines.SCREEN_MIN_N_BOOT}; part of each trial's identity)")
 
     s = sub.add_parser("backtest", help="backtest a rule feature or a model; logs a trial")
     s.add_argument("--track", choices=("A", "B"), required=True)
@@ -178,6 +186,14 @@ def _now() -> datetime:
 
 def _date(s: str) -> date:
     return date.fromisoformat(s)
+
+
+def _screen_n_boot(s: str) -> int:
+    """ADR 0003 implementation notes: n_boot >= 999; fewer is a usage error (exit 2)."""
+    n = int(s)
+    if n < pipelines.SCREEN_MIN_N_BOOT:
+        raise argparse.ArgumentTypeError(f"must be >= {pipelines.SCREEN_MIN_N_BOOT}, got {n}")
+    return n
 
 
 if __name__ == "__main__":

@@ -208,3 +208,84 @@ B 900 stocks: GOOG/FOX/NWS removed). ADR 0003 (sub-category screen) written BEFO
 
 **Rules I am holding to:** hold-out untouched; no merge of dev into main without the user; every
 evaluation logged as a trial; BigQuery budget unchanged (no new pulls needed for 0003).
+
+## 2026-10-05 (night) — ADR 0003 screen integrated (`eventtrade screen`)
+
+Three parallel agents built the parts; this pass wired them into `cli/pipelines.screen` and the
+`screen --track A|B [--n-boot N]` subcommand. Nothing committed, no CLI command run, the db not
+written (a v2 `build-dataset` was running against it).
+
+- **Parts.** `Asset.screen_group` + `assets.screen_group` migration + universe groups (A: dm 20,
+  em 21, commodity 7 incl. XLE; B: GICS sector from Wikipedia). `core/screen_features`: the S3
+  signals (`sm5_z.60` of each family's `mean`). `core/screen`: cell IC, joint bootstrap test, EB,
+  BH, Holm, confirmation.
+- **Orchestration choices fixed before any screen result** (none exists yet):
+  joint test significant when min(p_S, p_M) < 0.025 (Bonferroni over the two statistics; ADR
+  0003 names both but no combination rule); stationary-bootstrap mean block 40 (2 x the longest
+  horizon); seed = config seed; discovery labels embargoed so an h-day label ends by
+  2019-12-31; EB on directional ICs (registered sign, or the discovery-t sign of two-sided cells)
+  pooled toward their mean; BH on the bootstrap per-cell p-values; confirmation spread = mean
+  quantile spread and turnover over the confirmation period within the group, cost as gate 1.
+  Trial windows are the fixed period bounds (not the data's min/max), so ids are stable.
+- **Thin groups** (< 5 names with a signal on more than half the discovery days) are skipped and
+  printed, and listed in every trial's notes; their cells are not logged as trials.
+- **Labels:** stored dev labels at h = 5, 20 are reused when they cover every priced ticker,
+  otherwise built from dev prices in memory.
+- Tests: `tests/cli/test_pipelines.py` (per-cell/period logging, rerun logs nothing, stop path,
+  confirmation only for discovered cells, no read ends after the hold-out start, Track B end to
+  end with the real bootstrap) and `tests/cli/test_main.py` (exit 4 without screen groups).
+
+**Before running the screen:** the v2 build must finish; then `load-universe` (both tracks) so
+`init()` adds `screen_group` to the live db and the upsert fills it; `screen` exits 4 until then.
+Open for the ADR owner: the S/M combination rule and directional S/M reading, the MSCI
+inception calls (ARGT, VNM, KSA, QAT, UAE as em; EIS em and GREK dm by the inception rule),
+Track A share = family count / the country's n_events, Track B org_neg_docs as the `mean`
+(negative / mentioning docs).
+
+## 2026-10-05 (late night) — ADR 0003 implementation notes applied to the screen code
+
+Tests first, then code. Nothing committed; no CLI command run against the real db. The open
+questions above are settled by ADR 0003's implementation notes.
+
+- **Trial identity.** Every screen trial's params now include `n_boot`, `mean_block`, `seed` and
+  `members_hash` (first 16 hex digits of sha256 of the cell's sorted tickers joined by `,`).
+  `screen` returns REFUSED (2) for n_boot < 999 (`SCREEN_MIN_N_BOOT`); the CLI rejects
+  `--n-boot` < 999 as a usage error (exit 2).
+- **Every cell counts.** The skip-group rule (`_thin_groups`) is gone. A cell is thin when its
+  discovery IC (>= 5 names with signal and label) exists on fewer than half of its embargoed
+  discovery trading days (`_is_thin`). Thin cells are left out of the joint test and EB, enter
+  BH with p = NaN (counted in m, never discovered) and are logged with
+  `note: "insufficient names"`. Rejected: keeping a group-level rule (the notes speak of cells).
+- **Shrinkage.** New `core/screen.shrink_directional`: signed cells pool sign x IC, two-sided
+  cells pool their unfolded IC, the direction is applied after shrinkage. The previous code
+  folded two-sided cells (direction x IC) before pooling, which the notes rule out. Trial notes
+  carry `shrunk_ic` (directional) and `eb_posterior` (the pooled value's posterior).
+- **Joint test.** Behaviour unchanged (z = sign x t, |t| two-sided; S, M; min(p_S, p_M) < 0.025);
+  the module docstring and pipeline comment now cite the notes.
+- **Universe.** `screen_group` = MSCI class as of 2015-03-02: EIS em -> dm, GREK dm -> em;
+  ARGT, VNM, KSA, QAT, UAE stay em; every other country class checked and unchanged (none was
+  reclassified between its fund's inception and 2015-03-02). `msci_note` rewritten to state the
+  2015-03-02 class. Group sizes unchanged (dm 20, em 21, commodity 7).
+- Screen pipeline tests now use n_boot = 999 (about 10-25 s each instead of 4-7 s).
+
+## 2026-10-05 — Review finding: confirmation p-value size at h = 20 (deferred)
+
+Finding (statistics, minor): `screen.confirm` takes p = norm.sf(sign * t) on the HAC t, and at
+h = 20 that test rejects more often than its nominal level, so Holm's 5% FWER is not held
+for h = 20 cells.
+
+- **Reproduced.** I simulated 30,000 MA(h-1) null series at T = 1320, computed t with
+  `screen._nw_t_rows` (seed 7) and counted rejections at alpha 0.05 / 0.025 / 0.0125 / 0.01.
+  h = 5: sd(t) 1.003, rates 0.0493 / 0.0248 / 0.0130 / 0.0106, so it is calibrated.
+  h = 20: sd(t) 1.029, rates 0.0546 / 0.0300 / 0.0164 / 0.0134, which is 1.09x to 1.34x
+  nominal, and the excess grows at Holm's smaller levels. The reviewer's 60k run found a
+  slightly larger excess (1.14x to 1.44x). Both runs show the same direction.
+- **Deferred, rule not changed.** ADR 0003's implementation notes register "Confirmation
+  p-values use the normal approximation of the HAC t". Calibrating the test would change a
+  registered rule, whether by a pre-simulated null table, a Student-t with df about 30, or the
+  seeded stationary bootstrap. Any of these needs an addendum to the notes from the ADR owner,
+  written before any confirmation run. Until then, read an h = 20 confirmation near the Holm
+  threshold as weaker evidence than its nominal level suggests.
+- The only code change is a sentence in the `core/screen.py` module docstring that states the
+  known size loss. Behaviour is unchanged. Fast suite: 1069 passed, 8 deselected.
+  lint-imports: 6 contracts kept.

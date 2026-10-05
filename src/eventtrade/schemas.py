@@ -77,6 +77,10 @@ class Asset(BaseModel):
     # Track B: lowercase strings as they appear in GKG V2Organizations.
     org_aliases: list[str] = []
     first_trade: date | None = None
+    # ADR 0003 screen cell group. Track A: 'dm' | 'em' for country ETFs (MSCI class as of
+    # 2015-03-02; frontier/standalone count as 'em'), 'commodity' for commodity ETFs and XLE,
+    # None otherwise. Track B: the GICS sector name from the Wikipedia index table.
+    screen_group: str | None = None
 
 
 class SignalReport(BaseModel):

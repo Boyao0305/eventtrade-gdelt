@@ -50,3 +50,21 @@ def test_usage_errors_exit_2(tmp_path: Path, argv):
     with pytest.raises(SystemExit) as e:
         cli.main(["--home", str(tmp_path), *argv])
     assert e.value.code == 2
+
+
+def test_screen_without_screen_groups_is_missing(tmp_path: Path):
+    # ADR 0003: the screen needs Asset.screen_group, which only a universe reload fills.
+    cli.main(["--home", str(tmp_path), "init-db"])
+    assert cli.main(["--home", str(tmp_path), "screen", "--track", "A"]) == 4
+    assert cli.main(["--home", str(tmp_path), "screen", "--track", "B", "--n-boot", "999"]) == 4
+
+
+# n_boot >= 999 (ADR 0003 implementation notes): fewer draws is a usage error, exit 2.
+@pytest.mark.parametrize("argv", [["screen"], ["screen", "--track", "C"],
+                                  ["screen", "--track", "A", "--n-boot", "0"],
+                                  ["screen", "--track", "A", "--n-boot", "998"],
+                                  ["screen", "--track", "A", "--n-boot", "x"]])
+def test_screen_usage_errors_exit_2(tmp_path: Path, argv):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--home", str(tmp_path), *argv])
+    assert e.value.code == 2

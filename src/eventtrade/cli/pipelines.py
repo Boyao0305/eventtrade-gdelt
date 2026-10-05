@@ -28,7 +28,8 @@ import pandas as pd
 
 from eventtrade.config import Config
 from eventtrade.core import aliases as core_aliases
-from eventtrade.core import cv, evaluate, features, labels, models, overfit
+from eventtrade.core import cv, evaluate, features, labels, models, overfit, screen_features
+from eventtrade.core import screen as screen_stats
 from eventtrade.core.features import MetricSpec
 from eventtrade.schemas import (
     FEATURE_COLUMNS,
@@ -564,6 +565,363 @@ def _signal_study_vol(
                       "features_version": features.FEATURES_VERSION, "expected_sign": sign}
             _log_trial(store, logged, "A", "signal", "A4", params, d0, d1, now, res.notes())
     return n_pass
+
+
+# --- sub-category screen (ADR 0003) -----------------------------------------------------------
+
+# ADR 0003 "Statistics", step 1. Inclusive feature-date windows. Changing them is a new ADR.
+SCREEN_DISCOVERY = (date(2015, 3, 2), date(2019, 12, 31))
+SCREEN_CONFIRMATION = (date(2020, 1, 1), date(2025, 3, 31))
+SCREEN_HORIZONS = (5, 20)
+SCREEN_MIN_NAMES = 5
+SCREEN_RECIPE = "sm5_z.60"
+SCREEN_HYPOTHESIS = "S3"
+SCREEN_BH_Q = 0.10
+SCREEN_HOLM_ALPHA = 0.05
+# Joint test (step 2), as settled in ADR 0003's implementation notes: directional statistics
+# S = sum max(z, 0)^2 and M = max z (z = sign x t, |t| for two-sided cells); the track passes
+# when min(p_S, p_M) < 5% / 2 (Bonferroni over the two statistics).
+SCREEN_JOINT_ALPHA = 0.05
+SCREEN_JOINT_RULE = "min(p_S, p_M) < alpha / 2"
+# Stationary-bootstrap mean block length: 2 x the longest horizon (implementation notes).
+SCREEN_MEAN_BLOCK = 2.0 * max(SCREEN_HORIZONS)
+# Fewest bootstrap draws accepted (implementation notes, "Trial identity").
+SCREEN_MIN_N_BOOT = 999
+# Trial note of a cell with fewer than SCREEN_MIN_NAMES names on most of its discovery days.
+SCREEN_THIN_NOTE = "insufficient names"
+
+
+@dataclass(frozen=True)
+class _ScreenCell:
+    signal: str  # family name in core/screen_features, e.g. 'violence'
+    feature: str  # 'S3.<signal>'
+    group: str  # Track A 'dm' | 'em' | 'commodity'; Track B a GICS sector
+    horizon: int
+    sign: float | None  # pre-registered IC sign; None = two-sided
+    members: tuple[str, ...]
+
+    def id(self, track: Track) -> str:
+        return f"{track}|{self.signal}|{self.group}|h{self.horizon}"
+
+
+def screen(
+    cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print, n_boot: int = 2000,
+) -> int:
+    """ADR 0003 sub-category screen of one track: discovery, joint test, EB, BH, confirmation.
+
+    Cells = the track's screen signals x asset groups (`Asset.screen_group`) x horizons 5, 20.
+    Signals are built in memory (`core/screen_features`, sm5_z.60), never stored. Every
+    pre-registered cell counts (ADR 0003 implementation notes): a cell whose discovery IC is
+    defined (>= 5 names) on fewer than half of its discovery days is kept, left out of the joint
+    test and EB, given p = NaN (counted in BH's m, never discovered) and logged with the note
+    "insufficient names". Discovery labels are embargoed: a horizon-h cell uses feature dates
+    whose label window ends by 2019-12-31. Every cell x period is logged as a `signal` trial
+    (hypothesis S3) whose params include n_boot, the mean block, the seed and a hash of the
+    cell's members, so re-running with the same settings logs nothing new and any other setting
+    is a new trial. If the joint test is not significant the track stops after logging the
+    discovery trials. REFUSED if n_boot < 999. Dev data only: every read ends at
+    `cfg.holdout_start` (half-open).
+    """
+    if n_boot < SCREEN_MIN_N_BOOT:
+        echo(f"refused: n_boot {n_boot} < {SCREEN_MIN_N_BOOT} (ADR 0003 implementation notes)")
+        return REFUSED
+    if SCREEN_CONFIRMATION[1] >= cfg.holdout_start or SCREEN_DISCOVERY[0] < cfg.start:
+        echo(f"refused: screen periods {SCREEN_DISCOVERY[0]}..{SCREEN_CONFIRMATION[1]} are not"
+             f" inside the dev period {cfg.start}..{cfg.holdout_start} (ADR 0001)")
+        return REFUSED
+    assets = store.read_assets(track)
+    if not assets:
+        echo(f"no track {track} assets: run `load-universe --track {track}`")
+        return MISSING
+    groups = _screen_groups(track, assets)
+    if not groups:
+        echo(f"no track {track} asset has a screen_group: run `load-universe --track {track}`"
+             " with the current universe code (ADR 0003 groups)")
+        return MISSING
+    tickers = sorted({t for members in groups.values() for t in members})
+    prices = store.read_prices(tickers, cfg.start, cfg.holdout_start)
+    if prices.empty:
+        echo(f"no prices for track {track}: run `ingest-prices --track {track}`")
+        return MISSING
+    tdays = _trading_days(prices)
+    daily = _read_screen_gdelt(store, track, assets, cfg.start, cfg.holdout_start)
+    if daily.empty:
+        echo(f"no GDELT rows for track {track}: run `ingest-gdelt`")
+        return MISSING
+    sig = screen_features.screen_signals(daily, tdays, assets, track)
+    sig = sig[sig["ticker"].isin(tickers) & (sig["date"] < pd.Timestamp(cfg.holdout_start))]
+    labs = _screen_labels(cfg, store, prices, tdays, tickers, echo)
+    echo(f"track {track}: {len(tickers)} screened assets in {len(groups)} group(s),"
+         f" {len(tdays)} trading days, {len(sig):,} signal rows, {len(labs):,} label rows")
+
+    cells = [
+        _ScreenCell(fam.name, fam.feature, g, h, fam.sign(g), tuple(sorted(members)))
+        for fam in screen_features.screen_families(track)
+        for g, members in sorted(groups.items())
+        for h in SCREEN_HORIZONS
+    ]
+    by_feature = {str(f): s for f, s in sig.groupby("feature", sort=False)}
+    empty = pd.DataFrame(columns=FEATURE_COLUMNS)
+
+    # Discovery: per-cell IC on embargoed discovery dates, then the joint test.
+    disc_end = {h: _embargoed_end(tdays, SCREEN_DISCOVERY[1], h) for h in SCREEN_HORIZONS}
+    n_disc_days = {h: sum(SCREEN_DISCOVERY[0] <= d <= disc_end[h] for d in tdays)
+                   for h in SCREEN_HORIZONS}
+    ids = {c: c.id(track) for c in cells}
+    ic_disc = {ids[c]: screen_stats.cell_ic(by_feature.get(c.feature, empty), labs, c.members,
+                                            c.horizon, SCREEN_DISCOVERY[0], disc_end[c.horizon],
+                                            SCREEN_MIN_NAMES)
+               for c in cells}
+    horizon_of = {ids[c]: c.horizon for c in cells}
+    signs = {ids[c]: c.sign for c in cells}
+    thin = {ids[c] for c in cells
+            if _is_thin(int(ic_disc[ids[c]].notna().sum()), n_disc_days[c.horizon])}
+    evaluable = [ids[c] for c in cells if ids[c] not in thin]
+    if thin:
+        echo(f"{len(thin)} cell(s) with fewer than {SCREEN_MIN_NAMES} names on most discovery"
+             f" days ({SCREEN_THIN_NOTE}): kept and logged with p = NaN, counted in BH's m,"
+             f" never discovered: {', '.join(sorted(thin))}")
+
+    joint: screen_stats.JointResult | None = None
+    if evaluable:
+        joint = screen_stats.joint_test({k: ic_disc[k] for k in evaluable},
+                                        {k: horizon_of[k] for k in evaluable},
+                                        {k: signs[k] for k in evaluable},
+                                        n_boot, SCREEN_MEAN_BLOCK, cfg.seed)
+        significant = _joint_significant(joint.p_s, joint.p_m)
+        echo(f"joint test ({len(evaluable)} of {len(cells)} cells, {joint.n_dates} dates,"
+             f" {n_boot} draws, mean block {SCREEN_MEAN_BLOCK:g}, seed {cfg.seed}):"
+             f" S = {joint.s_stat:.2f} p_S = {joint.p_s:.4f},"
+             f" M = {joint.m_stat:.2f} p_M = {joint.p_m:.4f} -> "
+             f"{'significant' if significant else 'not significant'} ({SCREEN_JOINT_RULE},"
+             f" alpha {SCREEN_JOINT_ALPHA})")
+    else:
+        significant = False
+        echo("joint test not run: every cell has insufficient names")
+    nan = float("nan")
+    t_disc = {k: nan if joint is None else joint.t.get(k, nan) for k in ic_disc}
+    z_disc = {k: nan if joint is None else joint.z.get(k, nan) for k in ic_disc}
+    # BH's m is every cell of the track: thin cells enter with p = NaN.
+    p_disc = {k: nan if joint is None else joint.p_cell.get(k, nan) for k in ic_disc}
+
+    est = {k: screen_stats.cell_estimate(ic_disc[k], horizon_of[k]) for k in ic_disc}
+    direction = {k: _screen_direction(signs[k], t_disc[k]) for k in ic_disc}
+    eb: screen_stats.EbResult | None = None
+    shrunk: dict[str, float] = {}
+    discovered: set[str] = set()
+    if significant:
+        try:
+            eb, shrunk = screen_stats.shrink_directional(
+                {k: est[k][0] for k in evaluable}, {k: est[k][1] for k in evaluable},
+                {k: signs[k] for k in evaluable}, t_disc)
+        except ValueError as e:
+            echo(f"EB shrinkage not computed: {e}")
+        discovered = screen_stats.benjamini_hochberg(p_disc, SCREEN_BH_Q) - thin
+        echo(f"Benjamini-Hochberg q = {SCREEN_BH_Q}: {len(discovered)} of {len(cells)} cell(s)"
+             " discovered")
+    else:
+        echo(f"track {track} stops here (ADR 0003 step 2): no shrinkage, discovery or"
+             " confirmation")
+
+    logged = {t.trial_id for t in store.read_trials(track, "signal")}
+    n_logged_before = len(logged)
+    joint_note = {"s_stat": None if joint is None else _num(joint.s_stat),
+                  "m_stat": None if joint is None else _num(joint.m_stat),
+                  "p_s": None if joint is None else _num(joint.p_s),
+                  "p_m": None if joint is None else _num(joint.p_m), "significant": significant,
+                  "rule": SCREEN_JOINT_RULE, "alpha": SCREEN_JOINT_ALPHA, "n_boot": n_boot,
+                  "mean_block": SCREEN_MEAN_BLOCK, "seed": cfg.seed, "n_cells": len(cells),
+                  "n_tested": len(evaluable), "n_insufficient": len(thin),
+                  "n_dates": 0 if joint is None else joint.n_dates}
+    rows: dict[str, list[str]] = {}
+    for c in cells:
+        k = ids[c]
+        mean, se = est[k]
+        pooled = eb is not None and k in eb.posterior
+        note = {"ic_mean": _num(mean), "se": _num(se), "n_days": int(ic_disc[k].notna().sum()),
+                "n_period_days": n_disc_days[c.horizon],
+                "t": _num(t_disc[k]), "z": _num(z_disc[k]), "p": _num(p_disc[k]),
+                "direction": direction[k],
+                "note": SCREEN_THIN_NOTE if k in thin else None,
+                # shrunk_ic: EB posterior in the cell's direction (applied after shrinkage);
+                # eb_posterior: the posterior of the pooled value (sign x IC, or IC if two-sided)
+                "shrunk_ic": _num(shrunk[k]) if pooled else None,
+                "eb_posterior": _num(eb.posterior[k]) if pooled else None,
+                "shrinkage": _num(eb.shrinkage[k]) if pooled else None,
+                "posterior_sd": _num(eb.posterior_sd[k]) if pooled else None,
+                "eb": None if eb is None else {"tau2": _num(eb.tau2),
+                                               "prior_mean": _num(eb.prior_mean),
+                                               "n_cells": eb.n_cells},
+                "bh_q": SCREEN_BH_Q, "discovered": k in discovered,
+                "feature_dates": [SCREEN_DISCOVERY[0].isoformat(),
+                                  disc_end[c.horizon].isoformat()],
+                "min_names": SCREEN_MIN_NAMES, "joint": joint_note}
+        _log_trial(store, logged, track, "signal", SCREEN_HYPOTHESIS,
+                   _screen_params(c, k, "discovery", n_boot, cfg.seed), *SCREEN_DISCOVERY,
+                   now, note)
+        rows[k] = [f"{note['n_days']:>6}", _fmt(mean, 9, 4), _fmt(t_disc[k], 7, 2),
+                   _fmt(p_disc[k], 8, 4), _fmt(shrunk[k] if pooled else nan, 9, 4),
+                   "yes" if k in discovered else ("thin" if k in thin else "-")]
+
+    # Confirmation: discovered cells only, each tested once (Holm across them).
+    conf: screen_stats.ConfirmResult | None = None
+    if discovered:
+        conf, conf_days = _screen_confirm(cfg, track, [c for c in cells if ids[c] in discovered],
+                                          ids, by_feature, labs, t_disc, empty)
+        for c in cells:
+            k = ids[c]
+            if k not in discovered:
+                continue
+            v = conf.verdicts[k]
+            note = {**v.notes(), "n_days": conf_days[k],
+                    "discovery_trial": trial_id("signal", track,
+                                                _screen_params(c, k, "discovery", n_boot,
+                                                               cfg.seed),
+                                                *SCREEN_DISCOVERY),
+                    "shrunk_ic": _num(shrunk[k]) if k in shrunk else None,
+                    "holm_alpha": SCREEN_HOLM_ALPHA, "cost_bps": conf.cost_bps,
+                    "min_names": SCREEN_MIN_NAMES}
+            _log_trial(store, logged, track, "signal", SCREEN_HYPOTHESIS,
+                       _screen_params(c, k, "confirmation", n_boot, cfg.seed),
+                       *SCREEN_CONFIRMATION, now, note)
+            rows[k] += [_fmt(v.t, 7, 2), _fmt(v.p_one_sided, 8, 4),
+                        "CONFIRMED" if v.confirmed else "no"]
+
+    echo("ic, t: discovery mean IC and NW t (raw sign); p: bootstrap p in the registered"
+         " direction (two-sided if none); shrunk: EB posterior IC in the cell's direction;"
+         f" disc 'thin': {SCREEN_THIN_NOTE}; conf_p: one-sided, Holm across discovered cells")
+    echo(f"{'cell':<44}{'n':>6}{'ic':>9}{'t':>7}{'p':>8}{'shrunk':>9}  {'disc':<5}"
+         f"{'conf_t':>7}{'conf_p':>8}  confirmed")
+    for c in cells:
+        r = rows[ids[c]]
+        tail = "".join(r[6:8]) + f"  {r[8]}" if len(r) > 6 else ""
+        echo(f"{ids[c]:<44}{''.join(r[:5])}  {r[5]:<5}{tail}")
+    n_conf = 0 if conf is None else len(conf.confirmed)
+    n_new = len(logged) - n_logged_before
+    echo(f"track {track}: {len(cells)} cells, {len(discovered)} discovered, {n_conf} confirmed;"
+         f" {n_new} new trial(s) logged ({len(cells) + len(discovered) - n_new} already logged)")
+    return OK
+
+
+def _screen_confirm(
+    cfg: Config, track: Track, cells: list[_ScreenCell], ids: dict[_ScreenCell, str],
+    by_feature: dict[str, pd.DataFrame], labs: pd.DataFrame, discovery_t: dict[str, float],
+    empty: pd.DataFrame,
+) -> tuple[screen_stats.ConfirmResult, dict[str, int]]:
+    """ADR 0003 step 5 on the confirmation period; also each cell's number of IC days."""
+    lo, hi = (pd.Timestamp(d) for d in SCREEN_CONFIRMATION)
+    ic_conf: dict[str, pd.Series] = {}
+    spreads: dict[str, float] = {}
+    turnovers: dict[str, float] = {}
+    for c in cells:
+        k = ids[c]
+        f = by_feature.get(c.feature, empty)
+        f = f[f["ticker"].isin(c.members) & (f["date"] >= lo) & (f["date"] <= hi)]
+        ic_conf[k] = screen_stats.cell_ic(f, labs, c.members, c.horizon, *SCREEN_CONFIRMATION,
+                                          SCREEN_MIN_NAMES)
+        sp = evaluate.quantile_spread(f, labs, c.horizon, min_names=SCREEN_MIN_NAMES)
+        spreads[k] = float(sp.mean()) if len(sp) else float("nan")
+        turnovers[k] = evaluate.quantile_turnover(f, min_names=SCREEN_MIN_NAMES)
+    cost = cfg.cost_bps_etf if track == "A" else cfg.cost_bps_stock
+    res = screen_stats.confirm(
+        [ids[c] for c in cells], ic_conf, {ids[c]: c.sign for c in cells}, spreads, turnovers,
+        cost, {ids[c]: c.horizon for c in cells}, discovery_t, SCREEN_HOLM_ALPHA)
+    return res, {k: int(s.notna().sum()) for k, s in ic_conf.items()}
+
+
+def _screen_groups(track: Track, assets: list[Asset]) -> dict[str, list[str]]:
+    """Asset group -> tickers. Track A: the ADR 0003 groups only; Track B: every GICS sector."""
+    out: dict[str, list[str]] = {}
+    for a in assets:
+        g = a.screen_group
+        if g is None or (track == "A" and g not in screen_features.GROUPS_A):
+            continue
+        out.setdefault(g, []).append(a.ticker)
+    return out
+
+
+def _read_screen_gdelt(
+    store: Store, track: Track, assets: list[Asset], start: date, end: date
+) -> pd.DataFrame:
+    """The source the track's screen signals read: events by country (A), GKG by alias (B)."""
+    if track == "A":
+        ents = sorted({c for a in assets if a.screen_group for c in a.fips_countries})
+        return store.read_gdelt_daily("events", start, end, ents) if ents else pd.DataFrame()
+    ents = sorted({x for a in assets if a.screen_group for x in a.org_aliases})
+    return store.read_gdelt_daily("gkg", start, end, ents) if ents else pd.DataFrame()
+
+
+def _screen_labels(
+    cfg: Config, store: Store, prices: pd.DataFrame, tdays: list[date], tickers: list[str],
+    echo: Echo,
+) -> pd.DataFrame:
+    """Stored dev labels at h = 5, 20 if they cover every priced ticker, else built from prices."""
+    hs = list(SCREEN_HORIZONS)
+    stored = _for_tickers(store.read_labels(cfg.start, cfg.holdout_start, hs), set(tickers))
+    priced = set(prices["ticker"].unique())
+    if (not stored.empty and set(stored["horizon"].unique()) >= set(hs)
+            and set(stored["ticker"].unique()) >= priced):
+        echo("labels: stored dev labels reused")
+        return stored
+    echo("labels: built from dev prices (stored labels missing or incomplete)")
+    return labels.make_labels(prices, hs, tdays)
+
+
+def _is_thin(n_ic_days: int, n_period_days: int) -> bool:
+    """Too few names on most days: the cell's IC (needs >= SCREEN_MIN_NAMES names with a signal
+    and a label) is defined on fewer than half of its discovery trading days."""
+    return n_period_days <= 0 or n_ic_days < 0.5 * n_period_days
+
+
+def _embargoed_end(tdays: list[date], end: date, horizon: int) -> date:
+    """Last feature date t whose label (adj_open t+1 -> t+1+h) ends on or before `end`."""
+    days = [d for d in tdays if d <= end]
+    if len(days) < horizon + 2:
+        return days[0] - timedelta(days=1) if days else end
+    return days[-(horizon + 2)]
+
+
+def _joint_significant(p_s: float, p_m: float) -> bool:
+    ps = [p for p in (p_s, p_m) if math.isfinite(p)]
+    return bool(ps) and min(ps) < SCREEN_JOINT_ALPHA / 2
+
+
+def _screen_direction(sign: float | None, t: float) -> float | None:
+    """Registered sign, or the discovery-t sign of a two-sided cell (None if t is undefined)."""
+    if sign is not None:
+        return float(sign)
+    if not math.isfinite(t) or t == 0.0:
+        return None
+    return 1.0 if t > 0 else -1.0
+
+
+def _screen_params(
+    c: _ScreenCell, cell_id: str, period: str, n_boot: int, seed: int
+) -> dict[str, Any]:
+    """Trial params, hence trial identity: any other bootstrap setting or membership is a new,
+    counted trial (ADR 0003 implementation notes, "Trial identity")."""
+    return {"cell": cell_id, "signal": c.feature, "group": c.group, "horizon": c.horizon,
+            "period": period, "features_version": features.FEATURES_VERSION,
+            "expected_sign": c.sign, "recipe": SCREEN_RECIPE, "n_boot": int(n_boot),
+            "mean_block": float(SCREEN_MEAN_BLOCK), "seed": int(seed),
+            "members_hash": _members_hash(c.members)}
+
+
+def _members_hash(members: tuple[str, ...]) -> str:
+    """First 16 hex digits of the sha256 of the cell's sorted tickers joined by ','."""
+    return hashlib.sha256(",".join(sorted(members)).encode()).hexdigest()[:16]
+
+
+def _num(x: float | None) -> float | None:
+    """JSON-safe number: NaN/inf -> None."""
+    if x is None:
+        return None
+    x = float(x)
+    return x if math.isfinite(x) else None
+
+
+def _fmt(x: float, width: int, digits: int) -> str:
+    return f"{x:>{width}.{digits}f}" if math.isfinite(x) else f"{'nan':>{width}}"
 
 
 # --- backtest ---------------------------------------------------------------------------------
