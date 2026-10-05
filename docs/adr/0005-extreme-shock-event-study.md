@@ -96,3 +96,26 @@ and overlapping holding windows. Days with no active event are excluded. A cell 
 - *Event-level t-tests*: events on the same day are not independent; calendar-time portfolios
   are the standard remedy.
 - *Finer grids*: more configurations add search penalty faster than they add plausible coverage.
+
+## Amendment (2026-10-05, before any event-study result was computed)
+
+The statistics review of the implementation (logged in `docs/agent/log.md`) showed that the
+pre-registered discovery test is invalid for this design: a stationary bootstrap with mean block
+40 over a sparse union of event dates rejects 12–15% at a nominal 5% (worse for E2's ~100-date
+grids). No event-study statistic on real data had been computed when this was decided.
+
+- **Discovery null = placebo dates.** A cell's search-corrected p is the fraction of n_boot ≥ 999
+  placebo draws (seed `config.seed`, +1 correction) whose maximum directional t over the cell's
+  sufficient configurations is ≥ the observed maximum. In a draw, every event date of the
+  configuration (with all tickers that fired on it) is moved to a uniformly random trading date of
+  the same embargoed discovery window, keeping the dates of one configuration distinct; the same
+  date mapping is applied to all of the cell's configurations that share a (θ, W) trigger set, so
+  the correlation across horizons is preserved. Under this null the outcome's unconditional mean
+  (ETF drift for E2, the group-median bias of abnormal volatility at short horizons), clustering
+  and sparsity are all present in the placebo distribution exactly as in the observed one.
+- **Sufficiency** = at least 30 events **and** at least 30 distinct event dates in the period.
+- **Confirmation** p uses the same placebo-date construction on the confirmation window
+  (single selected configuration), as already implemented by the fixer (`eventstudy.placebo_p`).
+- Everything else — grid, selection rule, BH q = 0.10 across the 47 cells, Holm, cost legs, trial
+  logging — is unchanged. Abnormal volatility keeps the group median as registered; its h = 1 bias
+  is now neutralised by the placebo null.
