@@ -26,6 +26,11 @@ class Config(BaseModel):
     # Decision clock: GDELT rows added after this New York time belong to the next session.
     cutoff_et: str = "15:30"
 
+    # Pre-registered label horizons in trading days (ADR 0001).
+    horizons: tuple[int, ...] = (1, 5, 20)
+    # Seed for every random step (LightGBM bagging, stationary bootstrap).
+    seed: int = 20261004
+
     # Costs, one-way, in basis points of traded notional.
     cost_bps_etf: float = 5.0
     cost_bps_stock: float = 10.0

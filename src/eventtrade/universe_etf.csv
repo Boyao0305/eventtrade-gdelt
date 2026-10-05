@@ -1,0 +1,64 @@
+ticker,name,kind,track,group,fips_countries,gkg_themes,org_aliases,first_trade
+SPY,SPDR S&P 500 ETF Trust,etf,A,market,US,,,1993-01-29
+EWJ,iShares MSCI Japan ETF,etf,A,country,JA,,,1996-03-18
+EWG,iShares MSCI Germany ETF,etf,A,country,GM,,,1996-03-18
+FXI,iShares China Large-Cap ETF,etf,A,country,CH,,,2004-10-08
+EWY,iShares MSCI South Korea ETF,etf,A,country,KS,,,2000-05-12
+EWT,iShares MSCI Taiwan ETF,etf,A,country,TW,,,2000-06-23
+INDA,iShares MSCI India ETF,etf,A,country,IN,,,2012-02-03
+EWZ,iShares MSCI Brazil ETF,etf,A,country,BR,,,2000-07-14
+EWW,iShares MSCI Mexico ETF,etf,A,country,MX,,,1996-03-18
+EZA,iShares MSCI South Africa ETF,etf,A,country,SF,,,2003-02-07
+TUR,iShares MSCI Turkey ETF,etf,A,country,TU,,,2008-03-28
+EIS,iShares MSCI Israel ETF,etf,A,country,IS,,,2008-03-28
+KSA,iShares MSCI Saudi Arabia ETF,etf,A,country,SA,,,2015-09-17
+EWU,iShares MSCI United Kingdom ETF,etf,A,country,UK,,,1996-03-18
+EWQ,iShares MSCI France ETF,etf,A,country,FR,,,1996-03-18
+EWI,iShares MSCI Italy ETF,etf,A,country,IT,,,1996-03-18
+EWP,iShares MSCI Spain ETF,etf,A,country,SP,,,1996-03-18
+EWL,iShares MSCI Switzerland ETF,etf,A,country,SZ,,,1996-03-18
+EWN,iShares MSCI Netherlands ETF,etf,A,country,NL,,,1996-03-18
+EWD,iShares MSCI Sweden ETF,etf,A,country,SW,,,1996-03-18
+EWC,iShares MSCI Canada ETF,etf,A,country,CA,,,1996-03-18
+EWA,iShares MSCI Australia ETF,etf,A,country,AS,,,1996-03-18
+EWH,iShares MSCI Hong Kong ETF,etf,A,country,HK,,,1996-03-18
+EWS,iShares MSCI Singapore ETF,etf,A,country,SN,,,1996-03-18
+EIDO,iShares MSCI Indonesia ETF,etf,A,country,ID,,,2010-05-07
+THD,iShares MSCI Thailand ETF,etf,A,country,TH,,,2008-04-01
+EWM,iShares MSCI Malaysia ETF,etf,A,country,MY,,,1996-03-18
+EPHE,iShares MSCI Philippines ETF,etf,A,country,RP,,,2010-09-29
+EPOL,iShares MSCI Poland ETF,etf,A,country,PL,,,2010-05-26
+ECH,iShares MSCI Chile ETF,etf,A,country,CI,,,2007-11-20
+EPU,iShares MSCI Peru and Global Exposure ETF,etf,A,country,PE,,,2009-06-22
+GREK,Global X MSCI Greece ETF,etf,A,country,GR,,,2011-12-08
+ARGT,Global X MSCI Argentina ETF,etf,A,country,AR,,,2011-03-03
+VNM,VanEck Vietnam ETF,etf,A,country,VM,,,2009-08-14
+NORW,Global X MSCI Norway ETF,etf,A,country,NO,,,2009-08-19
+EIRL,iShares MSCI Ireland ETF,etf,A,country,EI,,,2010-05-11
+EWO,iShares MSCI Austria ETF,etf,A,country,AU,,,1996-03-18
+EWK,iShares MSCI Belgium ETF,etf,A,country,BE,,,1996-03-18
+EDEN,iShares MSCI Denmark ETF,etf,A,country,DA,,,2012-01-26
+ENZL,iShares MSCI New Zealand ETF,etf,A,country,NZ,,,2010-09-02
+QAT,iShares MSCI Qatar ETF,etf,A,country,QA,,,2014-05-01
+UAE,iShares MSCI UAE ETF,etf,A,country,AE,,,2014-05-01
+XLE,Energy Select Sector SPDR Fund,etf,A,sector,SA;IZ;IR;RS;AE;KU;VE;LY;NI,ENV_OIL;ECON_OILPRICE;ENV_NATURALGAS;WB_1768_OIL_AND_GAS_PIPELINE,,1998-12-22
+XLF,Financial Select Sector SPDR Fund,etf,A,sector,,WB_1234_BANKING_INSTITUTIONS;ECON_INTEREST_RATES;ECON_CENTRALBANK;ECON_DEBT;ECON_BANKRUPTCY,,1998-12-22
+XLK,Technology Select Sector SPDR Fund,etf,A,sector,,WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;CYBER_ATTACK,,1998-12-22
+XLV,Health Care Select Sector SPDR Fund,etf,A,sector,,WB_1350_PHARMACEUTICALS;HEALTH_PANDEMIC;HEALTH_VACCINATION;MEDICAL,,1998-12-22
+XLI,Industrial Select Sector SPDR Fund,etf,A,sector,,WB_135_TRANSPORT;ECON_TRADE_DISPUTE;ECON_FREETRADE,,1998-12-22
+XLB,Materials Select Sector SPDR Fund,etf,A,sector,,ENV_MINING;ENV_METALS;WB_1699_METAL_ORE_MINING;WB_2934_COPPER,,1998-12-22
+XLP,Consumer Staples Select Sector SPDR Fund,etf,A,sector,,ECON_INFLATION;ECON_COST_OF_LIVING;FOOD_SECURITY,,1998-12-22
+XLY,Consumer Discretionary Select Sector SPDR Fund,etf,A,sector,,UNEMPLOYMENT;ECON_COST_OF_LIVING;TAX_FNCACT_RETAILER,,1998-12-22
+XLU,Utilities Select Sector SPDR Fund,etf,A,sector,,ECON_ELECTRICALPRICE;ECON_ELECTRICALGRID;ECON_ELECTRICALGENERATION;WB_519_UTILITIES_GOVERNANCE_AND_PERFORMANCE,,1998-12-22
+XLRE,Real Estate Select Sector SPDR Fund,etf,A,sector,,ECON_HOUSING_PRICES;ECON_INTEREST_RATES,,2015-10-08
+XLC,Communication Services Select Sector SPDR Fund,etf,A,sector,,WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;ECON_MONOPOLY,,2018-06-19
+ITA,iShares U.S. Aerospace & Defense ETF,etf,A,sector,,MILITARY;ARMEDCONFLICT;TAX_WEAPONS;MIL_SELF_IDENTIFIED_ARMS_DEAL;SLFID_MILITARY_SPENDING;MIL_WEAPONS_PROLIFERATION,,2006-05-05
+USO,United States Oil Fund,etf,A,commodity,SA;IZ;IR;RS;US;AE;KU;NI;VE;LY;KZ;AG;CA;QA;NO,ENV_OIL;ECON_OILPRICE;WB_1768_OIL_AND_GAS_PIPELINE;WB_2290_OIL_AND_GAS_EXPORT,,2006-04-10
+UNG,United States Natural Gas Fund,etf,A,commodity,US;RS;QA;IR;NO;AS;CA;AG,ENV_NATURALGAS;ECON_NATGASPRICE;WB_551_GAS_TRANSPORTATION_STORAGE_AND_DISTRIBUTION,,2007-04-18
+GLD,SPDR Gold Shares,etf,A,commodity,CH;AS;RS;CA;US;SF;PE,WB_2936_GOLD;ECON_GOLDPRICE;ECON_CENTRALBANK;ECON_INFLATION,,2004-11-18
+SLV,iShares Silver Trust,etf,A,commodity,MX;PE;CH;PL;RS;CI;AS,WB_2937_SILVER;ENV_METALS,,2006-04-28
+CPER,United States Copper Index Fund,etf,A,commodity,CI;PE;CG;CH;US;AS;MX;ZA,WB_2934_COPPER;ENV_MINING;WB_1699_METAL_ORE_MINING,,2011-11-15
+DBA,Invesco DB Agriculture Fund,etf,A,commodity,US;BR;AR;UP;RS;IN;CH,WB_435_AGRICULTURE_AND_FOOD_SECURITY;FOOD_SECURITY;TAX_FOODSTAPLES_WHEAT;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_SOYBEAN;NATURAL_DISASTER_DROUGHT,,2007-01-05
+TLT,iShares 20+ Year Treasury Bond ETF,etf,A,rates,US,ECON_INTEREST_RATES;ECON_CENTRALBANK;ECON_INFLATION;ECON_SOVEREIGN_DEBT;WB_1045_TREASURY,,2002-07-30
+IEF,iShares 7-10 Year Treasury Bond ETF,etf,A,rates,US,ECON_INTEREST_RATES;ECON_CENTRALBANK;ECON_INFLATION;ECON_SOVEREIGN_DEBT;WB_1045_TREASURY,,2002-07-30
+SHY,iShares 1-3 Year Treasury Bond ETF,etf,A,rates,US,ECON_INTEREST_RATES;ECON_CENTRALBANK;ECON_INFLATION,,2002-07-30

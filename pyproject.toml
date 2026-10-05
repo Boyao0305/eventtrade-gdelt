@@ -16,6 +16,8 @@ dependencies = [
     "db-dtypes",
     "yfinance",
     "requests",
+    "lxml",       # pandas.read_html in adapters/universe.py
+    "tzdata",     # zoneinfo America/New_York on Windows
     "matplotlib",
 ]
 
@@ -42,6 +44,7 @@ line-length = 100
 
 [tool.importlinter]
 root_package = "eventtrade"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Layers inside the CLI container"
@@ -55,10 +58,16 @@ source_modules = ["eventtrade.core", "eventtrade.adapters", "eventtrade.schemas"
 forbidden_modules = ["eventtrade.cli"]
 
 [[tool.importlinter.contracts]]
+name = "Only cli.main names concrete adapters"
+type = "forbidden"
+source_modules = ["eventtrade.cli.pipelines"]
+forbidden_modules = ["eventtrade.adapters"]
+
+[[tool.importlinter.contracts]]
 name = "Core does no I/O"
 type = "forbidden"
 source_modules = ["eventtrade.core"]
-forbidden_modules = ["eventtrade.adapters", "sqlite3", "requests", "yfinance", "google.cloud"]
+forbidden_modules = ["eventtrade.adapters", "sqlite3", "requests", "yfinance", "google"]
 
 [[tool.importlinter.contracts]]
 name = "Core and adapters are independent"

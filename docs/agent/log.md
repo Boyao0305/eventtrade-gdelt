@@ -1,0 +1,100 @@
+# Session log — 2026-10-05, first build (branch dev, worktree gdelt-dev)
+
+## Built
+
+Nine components were built in parallel by separate agents, then integrated:
+
+- adapters: `store.py` (SQLite, append-only trials), `gdelt_bq.py` (+ `queries/*.sql`, budget
+  guard), `prices.py` (yfinance, Stooq), `universe.py` (ETF CSV, Wikipedia S&P lists).
+- core: `aliases.py`, `features.py`, `labels.py`, `evaluate.py`, `cv.py`, `models.py`,
+  `simulate.py`, `overfit.py`.
+- experiments 0001 (BigQuery cost/timing) and 0002 (GKG org alias precision).
+
+Integration (this log's author):
+
+- `cli/main.py` (composition root) and `cli/pipelines.py` (one function per subcommand,
+  Protocols `Store` and `GdeltSource`). Subcommands: status, init-db, load-universe,
+  ingest-prices, ingest-gdelt, build-dataset, signal-study, backtest, overfit-report, holdout.
+- Contract changes applied: `schemas.py` gained `VOL_LABEL_COLUMNS`, `SCORE_COLUMNS`,
+  `OOS_COLUMNS` (moved from core/labels and core/models, which now import them), a pinned date
+  dtype (datetime64[ns] midnight), `market` in `Asset.group`, corrected adjustment comment on
+  `PRICE_COLUMNS`, units on `OverfitReport` and `BacktestStats`, and the return-date convention on
+  `TRIAL_RETURN_COLUMNS`. `config.py` gained `horizons=(1, 5, 20)` and `seed`. `pyproject.toml`
+  gained `lxml`, `tzdata`, `include_external_packages = true` (required by import-linter for the
+  external forbidden modules; `google.cloud` had to become `google`), and a contract that
+  `cli.pipelines` may not import adapters.
+- Reconciled mismatches:
+  - GKG global theme rows carry the theme in the metric name (`theme_ENV_OIL_docs` on
+    `_GLOBAL`), but `map_to_tickers` maps entities, so ETF `gkg_themes` never matched. Added pure
+    `core/features.themes_as_entities` (re-key to entity = theme, metric `theme_docs`/`theme_tone`).
+  - `store.replace_labels` deleted every row of a horizon, so building Track B would wipe Track A
+    labels. Now scoped to (horizon, ticker) in the frame.
+  - Resumable ingest needed coverage by query: added `store.gdelt_session_dates(query_name, ...)`.
+  - `realized_vol_label` names its column `value`, which collides with the feature's `value` in
+    `evaluate._join`; pipelines renames it to `vol` before calling `daily_ic`.
+  - B1 needs attention x tone: added pure `core/features.product_feature`.
+- Docs: README (CLI contract, exit codes, resuming), `docs/domain.md`, `docs/components/cli.md`.
+
+## Tried and rejected
+
+- Importing `core.simulate` at module level in pipelines: every command (even `status`) paid
+  ~35 s for the vectorbt/numba import. Now imported inside `_simulate`.
+- Making `holdout` read pre-ingested hold-out data: the ingest commands refuse hold-out dates by
+  design, so `holdout` fetches its own prices and (with `--execute`) GDELT, and keeps hold-out
+  features in memory only (never in the `features` table).
+- Putting signal results in `Trial.params`: the trial id is a hash of params + data window, so
+  results go in `notes` (JSON: gate, sub-period ICs, SignalReport).
+
+## Open issues
+
+- Repo separation: the git common dir is `workspace/gdelt/.git` (own repo, branches main/dev),
+  not gtm_system, and no file references gtm_system. The worktree directory itself and the repo
+  still sit inside the `team_tool` folder tree; moving them out is the user's call.
+- Nothing has been ingested yet: `prices`, `assets`, `gdelt_daily` are empty. The dry run for
+  events 2024-01 estimated 2.01 GB. Full backfill does not fit one 900 GB month (exp. 0001):
+  events + orgs + themes 2021-2025Q1 first, older themes later.
+- Model gate (gate 2, CPCV model vs rule baseline) has no subcommand; `backtest --model` is
+  walk-forward only. `holdout` supports rule trials only.
+- DSR in `overfit-report` counts `backtest` trials only; signal-stage trials have no return
+  series. Whether gate 3 should also inflate N by the signal trials is undecided.
+- Gate-1 cost uses 2 x cost x turnover; a full long-short accounting would be ~4x (evaluate.py
+  open issue). Not decided.
+- `ingest-gdelt` skip rule: a month counts as done when its first and last session dates exist
+  for that query name; theme/alias list changes are invisible to it.
+- Track B features at full scale (~900 tickers x 2,600 days x ~8 features) were not timed; nor
+  was Track A `build-dataset` on real data.
+- A4 vol gate is a local variant (|t| >= 3 and sign in 2/3 sub-periods, no spread condition); the
+  ADR does not define a gate for a volatility target.
+- `ruff check` reports pre-existing findings in other agents' files under the user's global ruff
+  rules (DTZ001 on deliberately naive datetimes in store tests, PLR0124 `v != v` NaN test).
+- `lint-imports` crashes printing its banner on a GBK console; run with `PYTHONUTF8=1`.
+- Scratch from component agents: `.venv/scratch/` and `data/scratch_aliases/` (gitignored).
+- Experiment 0002's ~210 MB of BigQuery usage is not in `bq_usage` (raw client, before the adapter existed).
+
+# Review fixes — 2026-10-05 (fixer)
+
+Each finding was reproduced first; each fix has a regression test holding the triggering input.
+Fast suite: 760 passed, 8 deselected (slow, adapters only, untouched). lint-imports: 6 kept.
+No trials exist in the live store yet, so the stricter gates below change no logged verdict.
+
+| # | Finding | Outcome | What changed |
+|---|---|---|---|
+| 1 | Model backtest chose inputs from full-dev-period gate-1 trials (selection look-ahead) | fixed | Reproduced: noise features picked by full-period t gave walk-forward IC t 4.47. Default `backtest --model` now takes every stored feature and selects per fold with `core/models.select_features` on that fold's training dates only (IC table from `evaluate.daily_ic`, which uses only date-t labels). `_passing_features` removed. Params record `feature_selection` (`per_fold_train_ic` or `user`); explicit `--features` prints a warning. Tests: `test_model_selection_uses_training_dates_only` (a feature that predicts only a fold's test block is not chosen for that fold), `test_model_default_ignores_signal_trials`, `test_select_features` case table. |
+| 2 / 7 | DSR's N counted backtest columns only, not the signal trials that chose them | fixed | `overfit.deflated_sharpe` / `overfit_report` take `n_trials`; `pipelines.overfit_report` passes every logged non-hold-out trial of the track. When N exceeds the column count, V[SR] is floored at 1/(T-1) (null sampling variance), because one survivor column has no dispersion and would otherwise give SR_0 = 0. Tests: `test_n_trials_override_*`, `test_overfit_report_counts_all_stages`. |
+| 3 | Model path built day-t cross-section from label availability (future bars) | fixed | Reproduced with the reviewer's demo (C dropped, B's z -0.707 -> -0.632). `models.to_design(..., keep_unlabelled=True)` keeps every featured row; `_model_scores` fits on labelled rows and scores all. `_weights` ranks only names with a price bar on the score date (known at t). Tests: `test_to_design_keep_unlabelled`, `test_model_scores_names_without_future_label`, `test_weights_need_a_bar_on_the_score_date`. |
+| 4 | Gate 4 passed a CI entirely below zero | fixed | `_gate4_verdict`: pass only if CI low > 0 (and finite). Test: reviewer's input N(-0.001, 0.01), n=250, CI hi < 0 -> fail, plus a case table. |
+| 5 | Gate-1 cost charged 2c*tau for a $1 long + $1 short spread | fixed | Cost is now 4 * cost_bps * min(1, h * turnover). Gate case table updated; reviewer's case (spread 15 bp, turnover 1, 5 bp) now fails. |
+| 6 | NW default lags h-1 (Bartlett) oversized under overlapping labels | fixed | Reproduced: 5% test rejected ~11-14% at h=5/20. Default long-run variance is now max(Hansen-Hodrick with h-1 lags, Bartlett with max(auto, 2h) lags); explicit `lags=` keeps plain Bartlett. Monte Carlo (4000 reps, T=2500): P(|t|>=1.96) 0.048 / 0.049 / 0.059 and P(|t|>=3) 0.004 / 0.001 / 0.004 at h=1/5/20. Test: `test_nw_size_under_overlapping_labels` (old default kept as the triggering case). |
+| 8 | `--by-country` theme rows reach no feature | fixed (by removal) | Reproduced (`{'USO': 2}`, EWJ nothing). `--by-country` removed from the CLI; `ingest_gdelt(by_country=True)` returns REFUSED. The adapter and SQL still exist for a future spec. |
+| 9 | Country theme query relabels `_GLOBAL` rows, so plain gkg-themes re-pulls | fixed | Reproduced (three runs, three pulls). With the country query refused nothing overwrites `gkg_themes_daily`'s vintage. Test: `test_gkg_themes_by_country_refused_and_resume_holds` (False, True, False -> one pull; third run "1 already stored, 0 to pull"). |
+| 10 | Outer team_tool repo does not ignore `workspace/gdelt/` or `.claude/worktrees/` | deferred | Confirmed: team_tool has no `.gitignore` and an empty `.git/info/exclude`. The fix is outside this worktree and touches the team_tool repo, so it is the user's call: move `workspace/gdelt` out of the team_tool tree, or add both paths to team_tool's `.git/info/exclude` (local, untracked, adds no reference to eventtrade in team_tool's history). |
+| 11 | `holdout` without `--execute` fetched and wrote hold-out prices | fixed | Dry run now only reports and dry-runs GDELT estimates; prices are fetched only with `--execute`. Test: `test_holdout_dry_run_fetches_and_writes_nothing`. |
+| 12 | Scratch scripts ran BigQuery outside `GdeltBigQuery` (not in `bq_usage`) | partly fixed | Confirmed (`data/scratch_aliases/bq.py`, `bq_diag.py`, `bq_urls.py`; `bq_diag.py` billed with no opt-in). All three now `raise SystemExit` on start, pointing at `adapters/queries/` + `GdeltBigQuery`. Not done: backfilling the past ~210 MB into `bq_usage` -- the exact billed bytes would need an INFORMATION_SCHEMA.JOBS lookup (itself a query), left to the user. |
+
+Open after this pass:
+- Model gate 2 (CPCV model vs rule baseline) still has no subcommand; per-fold selection is
+  implemented for walk-forward only.
+- `select_features` applies the IC and sub-period parts of gate 1, not the cost condition
+  (turnover is not available per fold without the quantile machinery).
+- A fold where no feature passes on its training dates scores nothing; on noise the model trial
+  can therefore end with "no tradable weight dates" (MISSING) and is not logged.
