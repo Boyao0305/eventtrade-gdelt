@@ -19,8 +19,16 @@ flowchart TD
     pipelines --> overfit[core/overfit.py]
     pipelines --> screen_features[core/screen_features.py]
     pipelines --> screen[core/screen.py]
+    pipelines --> event_signals[core/event_signals.py]
+    pipelines --> eventstudy[core/eventstudy.py]
     pipelines --> schemas[schemas.py]
     screen_features --> features
+    event_signals --> features
+    event_signals --> labels
+    event_signals --> screen_features
+    eventstudy --> evaluate
+    eventstudy --> overfit
+    eventstudy --> screen
     screen --> evaluate
     screen --> overfit
     features --> schemas
@@ -58,6 +66,7 @@ flowchart LR
     subgraph select[Select]
         evaluate["core/evaluate<br/><i>signal-study</i>"]
         screen["core/screen_features + core/screen<br/><i>screen</i>"]
+        eventst["core/event_signals + core/eventstudy<br/><i>event-study</i>"]
     end
     subgraph bt[Backtest output]
         models["core/models + core/cv<br/><i>backtest</i>"]
@@ -75,6 +84,7 @@ flowchart LR
     db -->|prices| labels -->|LABEL_COLUMNS| db
     db -->|features + labels| evaluate -->|signal Trial| db
     db -->|GDELT_DAILY, prices, labels, assets.screen_group / gkg_themes| screen -->|S3 / A2 signal Trials| db
+    db -->|GDELT_DAILY, prices, assets.screen_group, logged trials of the other track| eventst -->|E1..E5 signal Trials| db
     db -->|features, labels, prices| models -->|WEIGHT_COLUMNS| simulate
     simulate -->|backtest Trial + TRIAL_RETURN_COLUMNS| db
     db -->|trial returns| overfit
@@ -85,6 +95,7 @@ flowchart LR
 | Signal trials | every stored feature of a track x horizons 1, 5, 20 (`sm5` features: 5, 20); Track A's A1 features also through the A4 vol gate | features (v2), labels, prices (dev) | `trials` rows, stage `signal`, params with `features_version` and `expected_sign`, gate 1 verdict in `notes` (JSON) | the researcher choosing what to backtest; N in gate 3's DSR (v1 and v2 trials both count) |
 | Screen trials (ADR 0003) | S3 signals built in memory x asset groups (`screen_group`) x h 5, 20; every cell kept: cells with fewer than 5 names on most discovery days get p = NaN (in BH's m, never discovered) and the note "insufficient names" | GDELT daily rows, prices, labels (stored dev labels if complete, else built), assets with `screen_group` (dev) | one `signal` trial per cell for discovery 2015-03-02..2019-12-31, and per discovered cell for confirmation 2020-01-01..2025-03-31; hypothesis `S3`, params `cell, signal, group, horizon, period, features_version, expected_sign, recipe, n_boot, mean_block, seed, members_hash`; notes with IC, t, p, shrunk IC, joint-test result; printed table | the researcher (confirmed cells go to gate 2 as a combined portfolio); N in gate 3's DSR |
 | Theme screen trials (ADR 0004, `screen --set a2`) | A2 signals (theme attention, theme tone) built in memory x the pinned groups commodity / sector x h 5, 20 = 8 cells; same statistics and thin-cell rule as S3 | every dev month of `gkg_themes_daily` stored (checked on session dates first), global theme rows, prices, labels, the 18 pinned ETFs with `gkg_themes` (dev) | as S3, hypothesis `A2`, params also `hypothesis` and `themes_hash` | as S3 |
+| Event-study trials (ADR 0005, `event-study`) | the track's ADR 0005 cells (A 44, B 3) x 32 configurations (theta x W x h), shock scores and outcomes built in memory; configurations with < 30 events or < 30 distinct event dates logged as "insufficient events", never selected | GDELT daily rows, prices, assets with `screen_group` (dev); for BH and Holm, the other track's logged event-study trials with the same settings | one `signal` trial per cell x configuration for discovery 2015-03-02..2019-12-31, and one per discovered cell (selected configuration) for confirmation 2020-01-01..2025-03-31; hypothesis = E-id, params `cell, theta, window, horizon, period, features_version, expected_sign, n_boot, null, seed, members_hash` (`null` = `placebo_dates`, ADR 0005 Amendment); notes with events, event dates, mean, t, cell placebo-date max-t p, placebo-date confirmation p, Holm and net-of-cost verdict (the confirmation that completes Holm also carries `holm_verdicts` for every discovered cell of both tracks); printed table | the researcher (confirmed return cells go to gate 2/3 as a combined event portfolio); N in gate 3's DSR |
 | Backtest trials | one rule feature, or one model (inputs chosen per fold on training-date IC) | features, labels, prices (dev) | `trials` row with `BacktestStats` + `trial_returns` rows | `overfit-report` |
 | Overfitting report | every backtest trial of a track | trial returns | printed DSR, PBO, CI, gate 3 verdict | the researcher deciding what reaches the hold-out |
 | Hold-out trial | one rule backtest trial, once | hold-out prices and GDELT, pulled by the command | `trials` row stage `holdout` + returns; gate 4 verdict | final decision / paper trading |
@@ -110,6 +121,7 @@ callables `FetchPrices`, `SanityCheck`, `FetchIndex`, `LoadEtfs`. Exit-code cons
 - `hypothesis_of(track: Track, feature: str) -> tuple[str, float | None]` — pre-registered hypothesis and sign of a feature name (sign None for H0 and unknown names `'?'`); names are matched through `features.feature_name`.
 - `signal_study(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print) -> int` — gate 1 over every feature x horizon with the registered sign, plus A4 (Track A), logged as trials; MISSING and nothing logged when no sm5 feature is stored (a v1 build).
 - `screen(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print, n_boot: int = 2000, screen_set: ScreenSet = "s3") -> int` — `screen_set` `"a2"` runs the ADR 0004 theme screen through the same steps: Track A only (REFUSED otherwise), 8 cells over `screen_features.THEME_SIGNALS` and `THEME_GROUP_MEMBERS`, hypothesis `A2`, params plus `hypothesis` and `themes_hash`. It returns MISSING before reading any GDELT value unless `pending_months(store, A2_QUERY, cfg.start, last dev day)` is empty, and MISSING if a pinned member is not a stored asset with themes. Constants `SCREEN_SETS`, `A2_HYPOTHESIS`, `A2_QUERY`. Default `"s3"` is the ADR 0003 screen: discovery IC per cell (labels embargoed to end inside the discovery window), joint bootstrap test over the cells with enough names (seed `cfg.seed`, mean block 40, significant when min(p_S, p_M) < 0.025; otherwise stop), EB shrinkage (`shrink_directional`), BH q = 0.10 over every cell (thin cells p = NaN), confirmation of discovered cells only (Holm 5%, cost-adjusted spread). Every cell x period logged as an S3 `signal` trial whose id covers n_boot, mean block, seed and the members hash. REFUSED if n_boot < 999 or a screen period reaches the hold-out; MISSING if no asset has `screen_group`. Constants `SCREEN_DISCOVERY`, `SCREEN_CONFIRMATION`, `SCREEN_HORIZONS`, `SCREEN_MIN_NAMES`, `SCREEN_BH_Q`, `SCREEN_HOLM_ALPHA`, `SCREEN_JOINT_ALPHA`, `SCREEN_JOINT_RULE`, `SCREEN_MEAN_BLOCK`, `SCREEN_MIN_N_BOOT`, `SCREEN_THIN_NOTE`.
+- `event_study(cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print, n_boot: int = 2000) -> int` — ADR 0005 extreme-shock event study of one track. It runs discovery over every cell x configuration, all logged; the selected configuration is the max directional t among those with >= 30 events and >= 30 distinct event dates; the cell p is `eventstudy.max_t_placebo` over those configurations (`_event_search`: their events, outcomes and embargoed windows, n_boot draws, seed = config seed). BH q = 0.10 runs across all 47 cells, using the other track's p-values read from its logged discovery trials with the same n_boot / null / seed / features version (`_event_settings`). Without them the run stops after discovery. Discovered cells are confirmed once with their selected configuration: one-sided placebo-date p (`eventstudy.placebo_p`, n_boot draws, seed = config seed), Holm 5% across the discovered cells of both tracks (pending while the other track's confirmations are not logged; the run that completes Holm writes every discovered cell's final verdict into its notes' `holm_verdicts`, read back by `event_verdicts(store, n_boot, seed) -> dict[str, bool | None]`), and the net-of-cost mean in the registered direction. Declustering runs on the trigger signal; E4/E4p then split the declustered attention events by same-day tone z (`_cell_events`). REFUSED if n_boot < 999 or a period reaches the hold-out; MISSING without grouped assets, prices or GDELT rows. Constants `EVENT_DISCOVERY`, `EVENT_CONFIRMATION`, `EVENT_NULL` (`placebo_dates`), `EVENT_MIN_N_BOOT`, `EVENT_BH_Q`, `EVENT_HOLM_ALPHA`, `EVENT_DECLUSTER_DAYS`, `EVENT_INSUFFICIENT_NOTE`, `EVENT_HYPOTHESES`.
 - `backtest(cfg: Config, store: Store, track: Track, now: Clock, feature: str | None = None, sign: float | None = None, model: Literal["ridge", "logistic", "lgbm"] | None = None, model_features: list[str] | None = None, horizon: int = 5, rebalance: int | None = None, echo: Echo = print) -> int` — rule or walk-forward model backtest, logged with returns; REFUSED for a feature with no registered sign unless `sign` is given.
 - `overfit_report(cfg: Config, store: Store, track: Track, echo: Echo = print) -> int` — gate 3.
 - `holdout(cfg: Config, store: Store, track: Track, source_trial: str, confirmed: bool, gdelt: GdeltSource | None, fetch: FetchPrices, execute: bool, now: Clock, budget_error: type[Exception] = RuntimeError, echo: Echo = print) -> int` — gate 4, once per trial.
@@ -185,6 +197,22 @@ ADR 0004 (A2): constants `THEME_PREFIX` (`A2.`), `GROUPS_A2` (`commodity`, `sect
 - `shrink_directional(estimates, std_errors, signs, discovery_t) -> tuple[EbResult, dict]` — pools sign x IC (signed cells) and the unfolded IC (two-sided cells), then applies each cell's direction to its posterior.
 - `benjamini_hochberg(pvals, q: float) -> set`, `holm(pvals, alpha: float) -> set`.
 - `confirm(discovered, ic_conf, signs, spreads, turnovers, cost_bps: float, horizon_of, discovery_t=None, alpha: float = 0.05) -> ConfirmResult` — ADR 0003 step 5.
+
+### core/event_signals.py — shared
+ADR 0005 cells, grid, shock scores and outcomes. Constants `CELLS` (47 `EventCell`s, id `<E-id>|<signal>|<group>`), `GRID` (32 (theta, W, h)), `THETAS`, `WINDOWS`, `HORIZONS`, `MIN_PERIODS` (W // 3), `SIGNALS`, `OUTCOMES`, `POOLED_B` (`all`).
+- `shock_scores(gdelt_daily, trading_days, assets, track, window: int) -> pd.DataFrame` — `[date, ticker, signal, value]`, v2 z (floored, clipped) vs a trailing W-day baseline excluding t, no smoothing.
+- `cell_scores(scores, cell) -> pd.DataFrame` — the cell's directional score (tone negated; Track B tone split applied).
+- `outcome_groups(assets, track) -> dict[str, str]`; `outcomes(prices, groups, horizons=HORIZONS, trading_days=None) -> pd.DataFrame` — `[date, ticker, horizon, outcome, value]`: raw return, abnormal return (vs the other group members), abnormal vol (vs the group median; forward vol open-to-open from the t+1 open, trailing vol close-to-close to t).
+
+### core/eventstudy.py — shared
+Constants `MIN_EVENTS` (30), `MIN_EVENT_DAYS` (30), `LEGS_ABNORMAL` (4), `LEGS_RAW` (2).
+- `sufficient(n_events: int, n_event_days: int) -> bool` — ADR 0005 Amendment: >= 30 events and >= 30 distinct event dates.
+- `triggers(score, theta: float, direction: int, decluster_days: int = 20, trading_days=None) -> pd.DataFrame` — declustered events per ticker (blocks positions p+1..p+20).
+- `calendar_time_series(events, outcome, h: int, trading_days) -> pd.Series` — ADR 0005 calendar-time portfolio: an event at t is active on t+1..t+h, and each active day's value is the mean h-day outcome of its active events; `attrs` carry `n_events`, `n_event_days`, `n_days`, `n_events_no_outcome`.
+- `cell_stat(series, h: int, sign) -> tuple[float, float, float, int]` — mean, NW t, directional t, active days.
+- `max_t_placebo(events_by_config, outcome_by_config, horizons, windows, sign, trading_days, n_draws: int, seed: int) -> MaxTPlaceboResult` — ADR 0005 Amendment discovery p: placebo-date null of the max directional t over a cell's configurations. One uniformly random permutation of the window's trading days per draw (window = union of the configurations' embargoed windows), shared by every configuration; each configuration's outcome is read only inside its own window (events moved past it drop out of that draw). Vectorised: per configuration a (event date x window date) table of outcome sums and counts, then a gather and cumulative-sum window per draw.
+- `placebo_p(events, outcome, h: int, sign, trading_days, n_draws: int, seed: int) -> PlaceboResult` — one-sided p of one configuration against placebo event dates (each event date moved, with its tickers, to a random date of the period; a draw's dates are distinct, not spaced).
+- `net_mean(mean: float, legs: int, cost_bps: float) -> float`.
 
 ### core/cv.py — shared
 - `purged_splits(dates, n_folds: int, n_test_folds: int, purge: int, embargo: int) -> list[Split]` — CPCV.

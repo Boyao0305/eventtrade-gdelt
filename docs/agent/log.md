@@ -339,3 +339,181 @@ the live db, because a long read could block the running writer.
   reach) and the A2 orchestration and CLI tests in `tests/cli/`.
 - **Next:** when `ingest-gdelt gkg-themes` (dry run) reports 0 to pull, run
   `screen --track A --set a2` from a frozen checkout, then write the experiment.
+
+## 2026-10-05 — ADR 0005 event study wired into the CLI (not run)
+
+No event-study value was computed on real data. Only synthetic fixtures were used, and the
+command was never run against the real db.
+
+- `core/event_signals.py` (cells, grid, shock scores, outcomes) and `core/eventstudy.py`
+  (triggers, event-date series, max-t bootstrap, costs) were written by two agents. Integration
+  is `pipelines.event_study` and the CLI command `event-study --track A|B [--n-boot N>=999]`.
+- **BH spans both tracks.** ADR 0005 runs BH across all 47 cells, while the command runs one
+  track at a time. A run therefore reads the other track's cell p-values from its logged
+  discovery trials (same n_boot, block, seed and features version). Until those exist, the run
+  stops after discovery. Holm for confirmation likewise spans the discovered cells of both
+  tracks and is reported as pending until the other track's confirmations are logged. The
+  sequence is A, B, A (or B, A, B); the result does not depend on the order.
+- **Judgement call, E4/E4p:** declustering runs on the attention signal, and the declustered
+  events are then split by same-day tone z (ADR: "the event is split"). E4 and E4p therefore
+  partition E5's events. Splitting first would let a positive spike fire 5 days after a negative
+  one. Pinned by `SPLIT_CASES` in `tests/cli/test_event_study.py`.
+- **Deviations carried over from the core modules (see their docstrings):** event-date
+  portfolio instead of the ADR's daily calendar-time portfolio; declustering blocks p+1..p+20;
+  baseline min_periods W // 3. All three need an ADR 0005 implementation note from the owner.
+- Speed on the synthetic fixture (13 ETFs, 910 days): about 2 min for one Track A run with the
+  full grid. Track B at full scale (about 900 stocks) has not been measured.
+- **Next:** add the ADR 0005 implementation notes, then from a frozen checkout run
+  `event-study --track A`, `--track B`, then `--track A` again, and write the experiment.
+
+## 2026-10-05 — ADR 0005 review findings: fixes and deferrals (still not run on real data)
+
+Nine review findings on the event-study code were reproduced on synthetic data or with
+read-only metadata. Five are fixed with regression tests. Four are deferred because the fix
+would change a rule that ADR 0005 pre-registers. No event-study value was computed on the real
+db, and no trial was logged.
+
+Fixed:
+- **Calendar-time portfolio (conformance).** `eventstudy.calendar_time_series` now implements
+  the ADR's form, replacing the event-date series. An event dated t is active on trading days
+  t+1..t+h. Each active day's value is the mean h-day outcome of its active events. It now
+  takes `trading_days`. The earlier deviation note no longer applies.
+- **Holm verdict never logged for the first track to confirm.** Trials are append-only,
+  enforced by DB triggers, so they cannot be updated. Withholding the pending trial would
+  deadlock: each track needs the other's logged confirmation p. Instead, the run that
+  completes Holm writes `holm_verdicts` into its confirmation notes: trial id, p, Holm reject
+  and confirmed, for every discovered cell of both tracks. `pipelines.event_verdicts(store,
+  n_boot, seed)` resolves a pending trial from that record. A, B, A is enough, and a fourth run
+  changes nothing. Pinned in `test_holm_waits_for_the_other_tracks_confirmation`.
+- **Confirmation p.** The normal p of the HAC t is replaced by `eventstudy.placebo_p`. Each
+  event date, with all its tickers, moves to a random date of the same embargoed window,
+  spaced 21 apart when feasible, and the directional t is recomputed (n_boot draws, seed =
+  config seed). With clustered events (4 tickers on 8 days, h = 20, 300 reps), the normal p
+  rejected 12.7% and the placebo p 7.7% at a nominal 5%. With 3 tickers on 11 days it was
+  12.3% vs 8.3% (an independent 300-rep rerun of the placebo gave 6.3%; Monte Carlo se is
+  about 1.3%). Spread-out events gave 4-8% for both. The placebo p is a randomisation test,
+  exact when event dates are exchangeable with the placebo dates. ADR 0005 does not fix the
+  confirmation test.
+- **Abnormal-vol overnight leak.** The forward vol is now open-to-open over opens t+1..t+1+h,
+  from entry; the trailing leg is unchanged. A +5% close t -> open t+1 gap no longer moves
+  abnormal vol at t, as `test_pre_entry_overnight_gap_does_not_enter_abnormal_vol` pins.
+- **Level vs crossing.** Behaviour is kept: the level rule plus the 20-day block. It is now a
+  judgement call in the `core/eventstudy` case table, pinned by trigger cases.
+
+Deferred (the ADR owner must amend ADR 0005 before any run):
+- **Max-t bootstrap oversized on short grids (critical).** Reproduced on a single config with
+  iid data and block 40: 13-15% rejection at 0.05 for 40-100 dates. Block 40 and the bootstrap
+  are registered. Suggested amendment: a placebo-date null for the search correction (the
+  32-configuration analogue of `placebo_p`), or a block scaled to the grid. The calendar-time
+  change lengthens the grids (active days instead of event days). The reviewer's realistic
+  null (20 DM-like tickers, all 32 configs, 200 reps, n_boot 199) now rejects 3.0% / 6.5% /
+  10.0% at 0.01 / 0.05 / 0.10, against 2.25% / 9.5% / 15.5% with the event-date series.
+  Sparse cells such as E2 commodity (few event dates) are still exposed, so the amendment is
+  still needed.
+- **Sufficiency counts events, not event days.** The ADR says "30 events". The calendar-time
+  form removes the degenerate n = 13 NW t, but clustered cells still have few independent
+  dates. Suggested amendment: also require >= 30 event days.
+- **Abnormal vol median bias at h = 1.** Still -0.17 to -0.21 under the null after the
+  forward-leg change. "Group's median" is registered. Suggested amendment: group mean, or drop
+  h = 1 for vol cells. The placebo confirmation p absorbs the bias; the `directional_mean > 0`
+  gate does not.
+- **E2 raw-return drift.** "Raw return, absolute direction" is registered. The placebo
+  confirmation absorbs drift; discovery does not.
+
+Also pending for the owner: an ADR 0005 implementation note recording the level rule, the
+active window t+1..t+h, the placebo confirmation p, the open-to-open forward vol and
+`holm_verdicts`.
+
+## 2026-10-05 — ADR 0005 Amendment implemented: placebo-date discovery null, event-date sufficiency (not run)
+
+No event-study statistic on real data was computed or inspected. The real db was opened
+read-only (`mode=ro`, a store subclass that refuses writes) only to time the discovery. The
+harness printed timings and sizes, never a mean, t or p. Nothing was logged.
+
+- **Discovery p = placebo-date max-t** (`eventstudy.max_t_placebo`, replacing
+  `max_t_bootstrap`, which is deleted along with its tests; nothing else used it). Observed M is
+  the max directional t of the exact calendar-time series over the cell's sufficient
+  configurations. Each of n_boot draws (seed = config seed) takes one uniformly random
+  permutation of the trading days of the cell's embargoed discovery window and moves every event
+  date of every configuration, with all its tickers, to its image. Then every configuration's
+  calendar-time NW t is recomputed and the maximum taken; p = (1 + #{M* >= M}) / (n_boot + 1).
+  Pinned against a loop over `calendar_time_series` (same permutations) in
+  `tests/core/test_eventstudy.py`.
+- **Judgement calls** (in the module's case table):
+  - One permutation per draw is shared by the whole cell, not one per (θ, W) trigger set. The
+    Amendment requires that the h's of a trigger set share the mapping, and this does that.
+    Sharing it across trigger sets as well keeps the θ/W correlation of the max. Independent
+    mappings would inflate the null max and make the test conservative.
+  - Dates are distinct only, with no 21-day spacing, following the Amendment's wording.
+    `placebo_p` (confirmation) keeps its spacing.
+  - The placebo window is the union of the configurations' embargoed windows (the h = 1
+    window). A configuration's outcome is read only inside its own window, so an event moved
+    past a longer h's embargo (at most 19 of about 1,220 dates) drops out of that draw.
+  - The units moved are the events with an outcome on their own date.
+- **Size, synthetic**: 4 tickers, 2 nested trigger sets x h 1/5/20, ~32 clustered event dates,
+  common drift 0.15 per day. Over 300 reps the rejection rates at 0.01 / 0.05 / 0.10 were
+  0.3% / 4.3% / 10.0%, while the naive max t was "significant" in more than half the reps.
+  The test pins 150 reps within 1-10%.
+- **Sufficiency** = `eventstudy.sufficient`: >= 30 events and >= 30 distinct event dates
+  (`MIN_EVENT_DAYS`). Both counts and both minima are in every trial's notes. The rule also
+  applies to the confirmation evaluation, as "in the period" reads.
+- **Trial identity**: params drop `mean_block` and add `null: "placebo_dates"`
+  (`pipelines._event_settings`, also used to match the other track's logged trials and by
+  `event_verdicts`). No id can equal one from the bootstrap design, which a test pins.
+  Discovery notes' `search` carries `test: placebo_dates_max_t`, `n_draws`, `n_dates` and
+  `null_max_mean`.
+- Confirmation is unchanged (`placebo_p` on the confirmation window).
+- **Speed**: per configuration, a (event date x window date) table of the tickers' outcome
+  sums and counts is built once (one matmul). A draw is then a gather plus a cumulative-sum
+  window, and `_nw_t_rows` handles all draws at once. `_calendar` no longer re-iterates a
+  DatetimeIndex element by element, and the observed series is no longer joined twice. Real-data
+  timing (n_boot 999, read-only, dev period):
+  - **Track A**: about 20 min. Read 175 s, scores and outcomes 25 s, then per cell 13-39 s:
+    E1|quad4|em 17 s, E2|violence|commodity 13 s, E3|quad4|em 39 s; 44 cells x 23 s mean.
+  - **Track B**: about 14 min. Read 214 s, scores and outcomes 209 s, then E5 169 s (17.8k
+    events max, 1,193 event dates) and E4 126 s; 3 cells x 147 s.
+  - Not included: trial writes (about 1,400 rows, a few seconds) and confirmation (one
+    `placebo_p` per discovered cell).
+  - A first Track B timing attempt died during the read without a traceback. The rerun
+    completed normally.
+- The fixture suite (`tests/cli/test_event_study.py`) now runs the real placebo max-t end to
+  end and spies on `max_t_placebo`'s inputs: only sufficient configurations, discovery windows,
+  n_boot draws, seed.
+- **Next:** from a frozen checkout, run `event-study --track A`, then `--track B`, then
+  `--track A`, and write the experiment.
+
+## 2026-10-05 — Confirmation placebo p: sampler hang and date spacing fixed (not run)
+
+Two review findings on `eventstudy.placebo_p`, both reproduced on synthetic data. No
+event-study value was computed on the real db, nothing was logged, and no confirmation has been
+run, so no trial carries the old construction.
+
+- **Sampler hang (critical, fixed).** `_spaced_draws` redrew a whole row of k integers until all
+  k were distinct. That loop never returns once k is around sqrt(free) or more. Reproduced with
+  n = 1,320, gap 20, 999 draws and a 25 s limit: k = 30 finished, k = 58 and 150 did not. The
+  sampler is now `_distinct_draws`: each row is the first k of a uniformly random permutation
+  (argsort of uniform keys, chunked). That is the same uniform k-subset law with no rejection
+  loop, and k = 30 to 1,320 now take under 0.1 s. Synthetic `placebo_p` timing (999 draws,
+  h = 20, 1,320 days): 0.2 s for 3 tickers / 57 dates, 0.4 s for 10 / 180, and 37 s for an
+  E5-sized cell (400 tickers, 1,193 dates, 17.5k events). Pinned by
+  `test_distinct_draws_terminate_and_are_distinct` (n = 1,320, k in {58, 150, 300, 1,320},
+  with a time bound) and `test_distinct_draws_are_uniform_and_unspaced`.
+- **Placebo dates spaced 21 apart (major, fixed).** Declustering is per (ticker, signal), so a
+  cell's pooled event dates are not spaced, but the confirmation null spaced its placebo dates
+  21 apart whenever that fit (about 63 dates or fewer on 1,320 days). Reproduced with 2 signals
+  x 3 ETFs (each signal declustered, firing for all 3 tickers), h = 20, drift, 58 pooled dates,
+  199 draws, 1,000 reps: **8.5% / 14.3%** rejected at 5% / 10% with spacing vs **3.8% / 10.1%**
+  without. `placebo_p` now draws distinct, unspaced dates, which is the discovery null's
+  construction (`max_t_placebo`). Its `decluster_days` argument and the `PlaceboResult` field
+  are removed, and the notes record `placebo_spacing: 0`. Triggers still decluster at 20 days.
+  Pinned by `test_placebo_p_size_at_h20_with_two_signals_whose_pooled_dates_are_not_spaced`
+  (200 reps, within 1-8%).
+  - **Implementation note for the owner.** This follows the Amendment's "same placebo-date
+    construction" as the discovery null (uniform distinct dates). The Amendment also says "as
+    already implemented by the fixer (`eventstudy.placebo_p`)", and that implementation spaced
+    its dates. Spacing was a judgement call in the module's table and is not in the ADR text.
+    It is dropped before any confirmation was computed. If the owner reads the Amendment as
+    pinning the spaced version, it needs a one-line ADR note either way.
+  - `test_placebo_p_absorbs_a_common_drift` now checks 8 panels (median z > 3, median p > 0.2,
+    every null mean > 2) instead of one fixture. The new event generator draws from a
+    different random stream, and the old single fixture landed at z = 2.0.

@@ -15,10 +15,11 @@ Adapters arrive as arguments typed by the Protocols below (declared here, in the
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, Protocol
@@ -28,7 +29,17 @@ import pandas as pd
 
 from eventtrade.config import Config
 from eventtrade.core import aliases as core_aliases
-from eventtrade.core import cv, evaluate, features, labels, models, overfit, screen_features
+from eventtrade.core import (
+    cv,
+    evaluate,
+    event_signals,
+    eventstudy,
+    features,
+    labels,
+    models,
+    overfit,
+    screen_features,
+)
 from eventtrade.core import screen as screen_stats
 from eventtrade.core.features import MetricSpec
 from eventtrade.schemas import (
@@ -1016,6 +1027,564 @@ def _num(x: float | None) -> float | None:
 
 def _fmt(x: float, width: int, digits: int) -> str:
     return f"{x:>{width}.{digits}f}" if math.isfinite(x) else f"{'nan':>{width}}"
+
+
+# --- extreme-shock event study (ADR 0005) -----------------------------------------------------
+
+# ADR 0005 "Nested optimization" and "Confirmation". Inclusive event-date windows; changing them
+# is a new ADR. Discovery events are embargoed so that their outcome window ends by the last
+# discovery day (`_embargoed_end`), confirmation events likewise by the last dev day.
+EVENT_DISCOVERY = (date(2015, 3, 2), date(2019, 12, 31))
+EVENT_CONFIRMATION = (date(2020, 1, 1), date(2025, 3, 31))
+EVENT_NULL = "placebo_dates"  # ADR 0005 Amendment: discovery and confirmation null
+EVENT_MIN_N_BOOT = 999
+EVENT_BH_Q = 0.10
+EVENT_HOLM_ALPHA = 0.05
+EVENT_DECLUSTER_DAYS = 20
+EVENT_INSUFFICIENT_NOTE = "insufficient events"
+EVENT_HYPOTHESES = frozenset(c.hypothesis for c in event_signals.CELLS)
+_OTHER_TRACK: dict[str, Track] = {"A": "B", "B": "A"}
+
+# One configuration of the grid: (theta, W, h), as in event_signals.GRID.
+EventConfig = tuple[float, int, int]
+
+
+@dataclass(frozen=True)
+class _EventEval:
+    """One cell x configuration x period: calendar-time series and its statistics."""
+
+    series: pd.Series
+    events: pd.DataFrame  # the events dated in `event_dates`
+    outcome: pd.DataFrame  # the outcome frame passed in (not copied; read inside the window)
+    n_events: int
+    n_event_days: int  # distinct event dates
+    n_days: int  # active days: the calendar-time series' length
+    n_no_outcome: int
+    mean: float
+    t: float
+    z: float  # t in the registered direction
+    event_dates: tuple[date, date]  # inclusive window the events were taken from
+
+    @property
+    def sufficient(self) -> bool:
+        """ADR 0005 Amendment: >= 30 events and >= 30 distinct event dates."""
+        return eventstudy.sufficient(self.n_events, self.n_event_days)
+
+
+def event_study(
+    cfg: Config, store: Store, track: Track, now: Clock, echo: Echo = print, n_boot: int = 2000,
+) -> int:
+    """ADR 0005 extreme-shock event study of one track: nested discovery, BH, confirmation.
+
+    Shock scores (W = 60, 120) and outcomes (h = 1, 5, 10, 20) are built in memory from dev data
+    only (every read ends at `cfg.holdout_start`, half-open) and never stored. For each of the
+    track's cells (`event_signals.CELLS`) and each of the 32 configurations (theta, W, h):
+    declustered events (`eventstudy.triggers`, 20 trading days, per ticker on the cell's
+    trigger signal; E4/E4p split the declustered attention events by the same-day tone z), the
+    calendar-time series of the discovery period and its NW t. Every cell x configuration is logged
+    as a `signal` trial (hypothesis = the E-id); a configuration with fewer than 30 events or
+    fewer than 30 distinct event dates (ADR 0005 Amendment) is logged with the note
+    "insufficient events" and cannot be selected. Per cell the selected configuration is the
+    largest directional t among the sufficient ones, and the cell's p is the placebo-date max-t
+    p over them (`eventstudy.max_t_placebo`, ADR 0005 Amendment: n_boot draws, seed
+    `cfg.seed`, one permutation of the discovery window's trading days per draw shared by
+    every configuration); p = NaN when none is sufficient.
+
+    Benjamini-Hochberg at q = 0.10 runs across ALL 47 cells (ADR 0005), so the other track's
+    cell p-values are read from its logged discovery trials with the same settings; until that
+    track has been run, this run stops after logging discovery. Discovered cells of this track
+    are then confirmed once on 2020-01-01..2025-03-31 with their selected configuration
+    (one-sided placebo-date p, `eventstudy.placebo_p`, n_boot draws, seed `cfg.seed`; Holm at
+    5% across every discovered cell of both tracks, the other track's confirmation p-values
+    read from its logged trials; net-of-cost mean in the registered direction for return
+    cells, none for volatility cells), each logged as a trial. When both tracks have
+    discovered cells, the first to confirm logs its confirmations with Holm pending; the
+    second completes Holm and its notes' `holm_verdicts` carry the final verdict of every
+    discovered cell of both tracks (`event_verdicts` resolves them). Re-running with the same
+    settings logs nothing new. REFUSED if n_boot < 999 or a
+    period reaches the hold-out; MISSING without grouped assets, prices or GDELT rows.
+    """
+    if n_boot < EVENT_MIN_N_BOOT:
+        echo(f"refused: n_boot {n_boot} < {EVENT_MIN_N_BOOT} (ADR 0005)")
+        return REFUSED
+    if EVENT_CONFIRMATION[1] >= cfg.holdout_start or EVENT_DISCOVERY[0] < cfg.start:
+        echo(f"refused: event-study periods {EVENT_DISCOVERY[0]}..{EVENT_CONFIRMATION[1]} are"
+             f" not inside the dev period {cfg.start}..{cfg.holdout_start} (ADR 0001)")
+        return REFUSED
+    assets = store.read_assets(track)
+    if not assets:
+        echo(f"no track {track} assets: run `load-universe --track {track}`")
+        return MISSING
+    groups = event_signals.outcome_groups(assets, track)
+    if not groups:
+        echo(f"no track {track} asset has a screen_group: run `load-universe --track {track}`"
+             " with the current universe code (ADR 0005 uses the ADR 0003 groups)")
+        return MISSING
+    cells = [c for c in event_signals.CELLS if c.track == track]
+    grouped = [a for a in assets if a.ticker in groups]
+    tickers = sorted(groups)
+    prices = store.read_prices(tickers, cfg.start, cfg.holdout_start)
+    if prices.empty:
+        echo(f"no prices for track {track}: run `ingest-prices --track {track}`")
+        return MISSING
+    tdays = _trading_days(prices)
+    daily = _read_event_gdelt(store, track, grouped, cfg.start, cfg.holdout_start)
+    if daily.empty:
+        echo(f"no GDELT rows for track {track}: run `ingest-gdelt`")
+        return MISSING
+    hold = pd.Timestamp(cfg.holdout_start)
+    scores = {w: _before(event_signals.shock_scores(daily, tdays, grouped, track, w), hold)
+              for w in event_signals.WINDOWS}
+    outcome_of = _event_outcomes(prices, groups, tdays, {c.outcome for c in cells}, hold)
+    members = {c.id: _event_members(c, groups) for c in cells}
+    sliced: dict[tuple[str, str, int, tuple[date, date]], pd.DataFrame] = {}
+
+    def outcome_for(c: event_signals.EventCell, h: int, period: tuple[date, date]) -> pd.DataFrame:
+        """The cell's outcome frame restricted to its members and the period's event dates
+        (cached: calendar_time_series' cost grows with the frame it merges against)."""
+        key = (c.group, c.outcome, h, period)
+        if key not in sliced:
+            o = outcome_of[(c.outcome, h)]
+            lo, hi = pd.Timestamp(period[0]), pd.Timestamp(_embargoed_end(tdays, period[1], h))
+            sliced[key] = o[o["ticker"].isin(members[c.id]) & (o["date"] >= lo)
+                            & (o["date"] <= hi)].reset_index(drop=True)
+        return sliced[key]
+
+    echo(f"track {track}: {len(tickers)} grouped assets, {len(tdays)} trading days,"
+         f" {len(cells)} cells x {len(event_signals.GRID)} configurations,"
+         f" {sum(len(s) for s in scores.values()):,} shock-score rows")
+
+    settings = _event_settings(n_boot, cfg.seed)
+    logged = {t.trial_id for t in store.read_trials(track, "signal")}
+    n_logged_before = len(logged)
+    nan = float("nan")
+
+    # Discovery: every cell x configuration, then the search-corrected p per cell.
+    events: dict[str, dict[tuple[int, float], pd.DataFrame]] = {}
+    disc: dict[str, dict[EventConfig, _EventEval]] = {}
+    p_cell: dict[str, float] = {}
+    selected: dict[str, EventConfig | None] = {}
+    for c in cells:
+        events[c.id] = {}
+        for w in event_signals.WINDOWS:
+            base = event_signals.cell_scores(scores[w], dataclasses.replace(c, split=None))
+            base = base[base["ticker"].isin(members[c.id])]
+            for th in event_signals.THETAS:
+                events[c.id][(w, th)] = _cell_events(base, scores[w], c, th, tdays)
+        disc[c.id] = {g: _event_eval(events[c.id][(g[1], g[0])],
+                                     outcome_for(c, g[2], EVENT_DISCOVERY), g[2], c.sign,
+                                     EVENT_DISCOVERY, tdays)
+                      for g in event_signals.GRID}
+        res = _event_search(c.id, disc[c.id], c.sign, tdays, n_boot, cfg.seed)
+        p_cell[c.id] = nan if res is None else float(res.p)
+        selected[c.id] = None if res is None else res.best_config  # type: ignore[assignment]
+        search = None if res is None else {
+            "p": _num(res.p), "max_z": _num(res.max_z),
+            "best_config": None if res.best_config is None else _cfg_label(res.best_config),
+            "n_sufficient": len(res.t), "n_dates": res.n_dates, "test": "placebo_dates_max_t",
+            "n_draws": res.n_draws, "null_max_mean": _num(res.null_max_mean)}
+        for g, e in disc[c.id].items():
+            note = {**_eval_note(e), "outcome": c.outcome, "trigger": c.trigger,
+                    "split": c.split, "selected": g == selected[c.id], "cell_p": _num(p_cell[c.id]),
+                    "search": search, "min_events": eventstudy.MIN_EVENTS,
+                    "min_event_days": eventstudy.MIN_EVENT_DAYS,
+                    "decluster_days": EVENT_DECLUSTER_DAYS}
+            _log_trial(store, logged, track, "signal", c.hypothesis,
+                       _event_params(c, g, "discovery", members[c.id], settings),
+                       *EVENT_DISCOVERY, now, note)
+
+    # Benjamini-Hochberg across all 47 cells: the other track's p-values come from its log.
+    other = _OTHER_TRACK[track]
+    other_ids = [c.id for c in event_signals.CELLS if c.track == other]
+    other_p = _logged_event_notes(store, other, settings, "discovery", "cell_p")
+    absent = [k for k in other_ids if k not in other_p]
+    discovered: set[str] | None = None
+    if absent:
+        echo(f"Benjamini-Hochberg across the {len(event_signals.CELLS)} ADR 0005 cells needs"
+             f" track {other}'s discovery p-values with the same settings ({len(absent)} of"
+             f" {len(other_ids)} cells not logged): run `event-study --track {other}"
+             f" --n-boot {n_boot}`, then rerun this track to confirm. Stopping after discovery.")
+    else:
+        all_p = {**p_cell, **{k: other_p[k] for k in other_ids}}
+        discovered = screen_stats.benjamini_hochberg(all_p, EVENT_BH_Q)
+        mine = discovered & set(p_cell)
+        echo(f"Benjamini-Hochberg q = {EVENT_BH_Q} across {len(all_p)} cells:"
+             f" {len(discovered)} discovered ({len(mine)} in track {track})")
+
+    # Confirmation: discovered cells of this track, selected configuration, once each.
+    conf: dict[str, _EventEval] = {}
+    conf_p: dict[str, float] = {}
+    conf_test: dict[str, dict[str, Any]] = {}
+    if discovered:
+        for c in cells:
+            g = selected[c.id]
+            if c.id not in discovered or g is None:
+                continue
+            oc = outcome_for(c, g[2], EVENT_CONFIRMATION)
+            ev = events[c.id][(g[1], g[0])]
+            e = _event_eval(ev, oc, g[2], c.sign, EVENT_CONFIRMATION, tdays)
+            conf[c.id] = e
+            if e.sufficient:
+                pr = _event_confirm_test(e, ev, oc, g[2], c.sign, tdays, n_boot, cfg.seed)
+                conf_p[c.id] = float(pr.p)
+                conf_test[c.id] = pr.notes()
+            else:
+                conf_p[c.id] = nan
+                conf_test[c.id] = {"test": "placebo_dates", "p": None}
+        other_trials = _logged_event_trials(store, other, settings, "confirmation")
+        other_conf = {k: _note_float(n, "p_one_sided") for k, (_, n) in other_trials.items()}
+        other_disc = discovered - set(p_cell)
+        holm = _event_holm(conf_p, other_disc, other_conf)
+        cost_bps = cfg.cost_bps_etf if track == "A" else cfg.cost_bps_stock
+        own: dict[str, tuple[str, float, float]] = {}  # cell -> (trial id, directional, net)
+        for c in cells:
+            if c.id not in conf:
+                continue
+            g = selected[c.id]
+            assert g is not None
+            e = conf[c.id]
+            legs = _event_legs(c.outcome)
+            directional = c.sign * e.mean
+            net = eventstudy.net_mean(directional, legs, cost_bps) if math.isfinite(e.mean) else nan
+            params = _event_params(c, g, "confirmation", members[c.id], settings)
+            own[c.id] = (trial_id("signal", track, params, *EVENT_CONFIRMATION), directional, net)
+        # With Holm complete, the note also records the verdict of every discovered cell of
+        # BOTH tracks: the other track's confirmations were logged while Holm was pending, and
+        # trials are append-only, so this is where their final verdict is written
+        # (`event_verdicts` reads it back).
+        verdicts = None if holm is None else _event_holm_verdicts(
+            holm, conf_p, own, {k: other_trials[k] for k in other_disc})
+        for c in cells:
+            if c.id not in conf:
+                continue
+            g = selected[c.id]
+            assert g is not None
+            e = conf[c.id]
+            _, directional, net = own[c.id]
+            legs = _event_legs(c.outcome)
+            reject = None if holm is None else c.id in holm
+            note = {**_eval_note(e), "p_one_sided": _num(conf_p[c.id]),
+                    "conf_test": conf_test[c.id], "holm_reject": reject,
+                    "holm_alpha": EVENT_HOLM_ALPHA, "holm_complete": holm is not None,
+                    "holm_verdicts": verdicts,
+                    "directional_mean": _num(directional), "legs": legs,
+                    "cost_bps": cost_bps if legs else 0.0, "net_mean": _num(net),
+                    "confirmed": _event_confirmed(reject, directional, net),
+                    "discovery_trial": trial_id("signal", track, _event_params(
+                        c, g, "discovery", members[c.id], settings), *EVENT_DISCOVERY),
+                    "discovery_p": _num(p_cell[c.id]), "bh_q": EVENT_BH_Q,
+                    "outcome": c.outcome, "min_events": eventstudy.MIN_EVENTS,
+                    "min_event_days": eventstudy.MIN_EVENT_DAYS}
+            _log_trial(store, logged, track, "signal", c.hypothesis,
+                       _event_params(c, g, "confirmation", members[c.id], settings),
+                       *EVENT_CONFIRMATION, now, note)
+        if holm is None:
+            echo(f"Holm across discovered cells is pending: track {other} has discovered cells"
+                 f" without a logged confirmation; run `event-study --track {other}"
+                 f" --n-boot {n_boot}`: its confirmation notes will carry this track's verdicts")
+    else:
+        holm = None
+
+    _event_table(echo, track, cells, disc, p_cell, selected, discovered, conf, conf_p, holm,
+                 cfg, n_boot)
+    n_new = len(logged) - n_logged_before
+    n_disc = 0 if discovered is None else len(discovered & set(p_cell))
+    echo(f"track {track}: {len(cells)} cells, {n_disc} discovered, {len(conf)} confirmation"
+         f" test(s); {n_new} new trial(s) logged"
+         f" ({len(cells) * len(event_signals.GRID) + len(conf) - n_new} already logged)")
+    return OK
+
+
+def _event_table(
+    echo: Echo, track: Track, cells: list[event_signals.EventCell],
+    disc: dict[str, dict[EventConfig, _EventEval]], p_cell: dict[str, float],
+    selected: dict[str, EventConfig | None], discovered: set[str] | None,
+    conf: dict[str, _EventEval], conf_p: dict[str, float], holm: set[str] | None, cfg: Config,
+    n_boot: int,
+) -> None:
+    echo(f"suff: configurations with >= {eventstudy.MIN_EVENTS} discovery events and >="
+         f" {eventstudy.MIN_EVENT_DAYS} event dates (others '{EVENT_INSUFFICIENT_NOTE}');"
+         f" config theta/W/h selected by the largest t in the registered direction; n, mean,"
+         f" t: discovery events, mean outcome (raw sign) and NW t of the selected config;"
+         f" p: placebo-date max-t ({n_boot} draws, seed {cfg.seed});"
+         f" disc: BH q = {EVENT_BH_Q} over 47 cells;"
+         f" conf_p one-sided placebo-date p, Holm {EVENT_HOLM_ALPHA} across discovered cells")
+    echo(f"{'cell':<26}{'sign':>5}{'suff':>6}  {'config':<12}{'n':>6}{'mean':>10}{'t':>7}"
+         f"{'p':>8}  {'disc':<8}{'conf_n':>7}{'conf_mean':>10}{'conf_t':>7}{'conf_p':>8}"
+         f"  confirmed")
+    cost_bps = cfg.cost_bps_etf if track == "A" else cfg.cost_bps_stock
+    for c in cells:
+        g = selected[c.id]
+        n_suff = sum(e.sufficient for e in disc[c.id].values())
+        e = disc[c.id][g] if g is not None else None
+        head = (f"{c.id:<26}{c.sign:>+5.0f}{n_suff:>3}/{len(disc[c.id]):<2}  "
+                f"{_cfg_label(g) if g else '-':<12}"
+                f"{e.n_events if e else 0:>6}{_fmt(e.mean if e else math.nan, 10, 5)}"
+                f"{_fmt(e.t if e else math.nan, 7, 2)}{_fmt(p_cell[c.id], 8, 4)}  ")
+        if discovered is None:
+            flag = "pending" if n_suff else "insuff"
+        else:
+            flag = "yes" if c.id in discovered else ("-" if n_suff else "insuff")
+        tail = ""
+        if c.id in conf:
+            ce = conf[c.id]
+            directional = c.sign * ce.mean
+            net = (eventstudy.net_mean(directional, _event_legs(c.outcome), cost_bps)
+                   if math.isfinite(ce.mean) else math.nan)
+            reject = None if holm is None else c.id in holm
+            verdict = _event_confirmed(reject, directional, net)
+            tail = (f"{ce.n_events:>7}{_fmt(ce.mean, 10, 5)}{_fmt(ce.t, 7, 2)}"
+                    f"{_fmt(conf_p[c.id], 8, 4)}  "
+                    f"{'pending' if verdict is None else ('CONFIRMED' if verdict else 'no')}")
+        echo(head + f"{flag:<8}" + tail)
+
+
+def _read_event_gdelt(
+    store: Store, track: Track, assets: list[Asset], start: date, end: date
+) -> pd.DataFrame:
+    """Events by the grouped ETFs' countries (A, incl. the tone rows), GKG by alias (B)."""
+    if track == "A":
+        ents = sorted({c for a in assets for c in a.fips_countries})
+        return store.read_gdelt_daily("events", start, end, ents) if ents else pd.DataFrame()
+    ents = sorted({x for a in assets for x in a.org_aliases})
+    return store.read_gdelt_daily("gkg", start, end, ents) if ents else pd.DataFrame()
+
+
+def _before(df: pd.DataFrame, end: pd.Timestamp) -> pd.DataFrame:
+    return df[pd.to_datetime(df["date"]) < end].reset_index(drop=True)
+
+
+def _event_outcomes(
+    prices: pd.DataFrame, groups: dict[str, str], tdays: list[date], kinds: set[str],
+    end: pd.Timestamp,
+) -> dict[tuple[str, int], pd.DataFrame]:
+    """(outcome kind, h) -> [date, ticker, value], built per horizon to bound memory."""
+    out: dict[tuple[str, int], pd.DataFrame] = {}
+    for h in event_signals.HORIZONS:
+        o = event_signals.outcomes(prices, groups, [h], tdays)
+        o = o[o["date"] < end]
+        for k in sorted(kinds):
+            out[(k, h)] = o.loc[o["outcome"] == k, ["date", "ticker", "value"]].reset_index(
+                drop=True)
+    return out
+
+
+def _event_members(cell: event_signals.EventCell, groups: Mapping[str, str]) -> tuple[str, ...]:
+    """Tickers whose events a cell pools: its group (A), or every grouped stock (B 'all')."""
+    if cell.group == event_signals.POOLED_B:
+        return tuple(sorted(groups))
+    return tuple(sorted(t for t, g in groups.items() if g == cell.group))
+
+
+def _cell_events(
+    base: pd.DataFrame, scores: pd.DataFrame, cell: event_signals.EventCell, theta: float,
+    tdays: list[date],
+) -> pd.DataFrame:
+    """Declustered events [date, ticker] of a cell at theta.
+
+    `base` is the cell's directional score WITHOUT the tone split (members only). Declustering
+    is on the trigger signal of the (asset, signal) pair; a Track B split cell then keeps the
+    declustered attention events whose same-day tone z is < 0 / >= 0 (ADR 0005: "the event is
+    split"). So E4 and E4p partition E5's events (less those with undefined tone), and an
+    attention spike blocks the next 20 days whatever its tone.
+    """
+    ev = eventstudy.triggers(base, theta, 1, EVENT_DECLUSTER_DAYS, tdays)
+    if cell.split is None:
+        return ev
+    keep = event_signals.cell_scores(scores, cell)[["date", "ticker"]]
+    keep = keep.assign(date=pd.to_datetime(keep["date"]))
+    return ev.merge(keep, on=["date", "ticker"], how="inner").sort_values(
+        ["date", "ticker"], ignore_index=True)
+
+
+def _event_eval(
+    events: pd.DataFrame, outcome: pd.DataFrame, h: int, sign: float,
+    period: tuple[date, date], tdays: list[date],
+) -> _EventEval:
+    """Calendar-time series and statistics of the events dated in `period` (embargoed for h)."""
+    lo = pd.Timestamp(period[0])
+    hi = pd.Timestamp(_embargoed_end(tdays, period[1], h))
+    ev = _in_window(events, lo, hi)
+    oc = _in_window(outcome, lo, hi)
+    s = eventstudy.calendar_time_series(ev, oc, h, tdays)
+    attrs = dict(s.attrs)
+    mean, t, z, _ = eventstudy.cell_stat(s, h, sign)
+    return _EventEval(series=s, events=ev, outcome=outcome, n_events=int(attrs["n_events"]),
+                      n_event_days=int(attrs["n_event_days"]), n_days=int(attrs["n_days"]),
+                      n_no_outcome=int(attrs["n_events_no_outcome"]), mean=mean, t=t, z=z,
+                      event_dates=(lo.date(), hi.date()))
+
+
+def _in_window(df: pd.DataFrame, lo: pd.Timestamp, hi: pd.Timestamp) -> pd.DataFrame:
+    return df[(df["date"] >= lo) & (df["date"] <= hi)]
+
+
+def _event_confirm_test(
+    e: _EventEval, events: pd.DataFrame, outcome: pd.DataFrame, h: int, sign: float,
+    tdays: list[date], n_draws: int, seed: int,
+) -> eventstudy.PlaceboResult:
+    """One-sided placebo-date p of a confirmation (`eventstudy.placebo_p`): the events and the
+    candidate placebo dates are those of `e`'s embargoed event window (distinct, not spaced)."""
+    lo, hi = pd.Timestamp(e.event_dates[0]), pd.Timestamp(e.event_dates[1])
+    return eventstudy.placebo_p(_in_window(events, lo, hi), _in_window(outcome, lo, hi), h, sign,
+                                tdays, n_draws, seed)
+
+
+def _event_search(
+    cell_id: str, evals: Mapping[EventConfig, _EventEval], sign: float, tdays: list[date],
+    n_boot: int, seed: int,
+) -> eventstudy.MaxTPlaceboResult | None:
+    """Placebo-date max-t over the cell's sufficient configurations (None if there are none).
+
+    ADR 0005 Amendment: each configuration's events, outcome and embargoed event window are
+    those of its discovery evaluation; the placebo window is their union (the h = 1 window).
+    `cell_id` is unused by the statistic; it names the cell for logging and test doubles.
+    """
+    suff = {g: e for g, e in evals.items() if e.sufficient}
+    if not suff:
+        return None
+    return eventstudy.max_t_placebo(
+        {g: e.events for g, e in suff.items()}, {g: e.outcome for g, e in suff.items()},
+        {g: g[2] for g in suff}, {g: e.event_dates for g, e in suff.items()}, sign, tdays,
+        n_boot, seed)
+
+
+def _eval_note(e: _EventEval) -> dict[str, Any]:
+    return {"n_events": e.n_events, "n_event_days": e.n_event_days, "n_days": e.n_days,
+            "n_events_no_outcome": e.n_no_outcome, "mean": _num(e.mean), "t": _num(e.t),
+            "z": _num(e.z), "sufficient": e.sufficient,
+            "note": None if e.sufficient else EVENT_INSUFFICIENT_NOTE,
+            "event_dates": [e.event_dates[0].isoformat(), e.event_dates[1].isoformat()]}
+
+
+def _event_params(
+    cell: event_signals.EventCell, g: EventConfig, period: str, members: tuple[str, ...],
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Trial params, hence identity: any other n_boot, null, seed or membership is a new trial."""
+    return {"cell": cell.id, "theta": float(g[0]), "window": int(g[1]), "horizon": int(g[2]),
+            "period": period, "features_version": settings["features_version"],
+            "expected_sign": float(cell.sign), "n_boot": settings["n_boot"],
+            "null": settings["null"], "seed": settings["seed"],
+            "members_hash": _members_hash(members)}
+
+
+def _event_settings(n_boot: int, seed: int) -> dict[str, Any]:
+    """Settings in every event-study trial's params; logged trials are matched on them. `null`
+    (ADR 0005 Amendment) keeps these ids apart from any trial of the bootstrap design."""
+    return {"n_boot": int(n_boot), "null": EVENT_NULL, "seed": int(seed),
+            "features_version": features.FEATURES_VERSION}
+
+
+def _logged_event_notes(
+    store: Store, track: Track, settings: Mapping[str, Any], period: str, key: str,
+) -> dict[str, float]:
+    """Cell id -> notes[key] (NaN for null) of a track's logged event-study trials of `period`
+    with the same n_boot, null, seed and features version. When a cell was logged under
+    several memberships, the most recently logged trial wins."""
+    return {k: _note_float(n, key)
+            for k, (_, n) in _logged_event_trials(store, track, settings, period).items()}
+
+
+def _logged_event_trials(
+    store: Store, track: Track, settings: Mapping[str, Any], period: str,
+) -> dict[str, tuple[Trial, dict[str, Any]]]:
+    """Cell id -> (trial, parsed notes) of a track's logged event-study trials of `period` with
+    the same settings; the most recently logged trial of a cell wins."""
+    out: dict[str, tuple[Trial, dict[str, Any]]] = {}
+    for t in store.read_trials(track, "signal"):  # insertion-time order
+        p = t.params
+        if (t.hypothesis not in EVENT_HYPOTHESES or "theta" not in p
+                or p.get("period") != period
+                or any(p.get(k) != v for k, v in settings.items())):
+            continue
+        try:
+            note = json.loads(t.notes)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(note, dict):
+            out[str(p["cell"])] = (t, note)
+    return out
+
+
+def _note_float(note: Mapping[str, Any], key: str) -> float:
+    v = note.get(key)
+    return float("nan") if v is None else float(v)
+
+
+def _event_holm_verdicts(
+    holm: set[str], conf_p: Mapping[str, float], own: Mapping[str, tuple[str, float, float]],
+    other: Mapping[str, tuple[Trial, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """Final verdict of every discovered cell of both tracks once Holm is complete.
+
+    `own`: cell -> (confirmation trial id, directional mean, net mean) of this run's cells;
+    `other`: the other track's discovered cells' logged confirmation (trial, notes).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for k, (tid, directional, net) in own.items():
+        out[k] = {"trial_id": tid, "p": _num(conf_p[k]), "holm_reject": k in holm,
+                  "confirmed": _event_confirmed(k in holm, directional, net)}
+    for k, (t, note) in other.items():
+        directional = _note_float(note, "directional_mean")
+        net = _note_float(note, "net_mean")
+        out[k] = {"trial_id": t.trial_id, "p": note.get("p_one_sided"), "holm_reject": k in holm,
+                  "confirmed": _event_confirmed(k in holm, directional, net)}
+    return dict(sorted(out.items()))
+
+
+def event_verdicts(store: Store, n_boot: int, seed: int) -> dict[str, bool | None]:
+    """Cell id -> final confirmation verdict of every logged ADR 0005 confirmation (both
+    tracks, current features version, the given n_boot and seed; placebo-date null).
+
+    A confirmation logged while Holm was pending has `confirmed` None in its own notes (trials
+    are append-only); its verdict is then read from the `holm_verdicts` of the other track's
+    confirmation that completed Holm. None: Holm has not completed yet.
+    """
+    settings = _event_settings(n_boot, seed)
+    logged = {tr: _logged_event_trials(store, tr, settings, "confirmation")
+              for tr in ("A", "B")}
+    out: dict[str, bool | None] = {}
+    for tr, trials in logged.items():
+        for k, (t, note) in trials.items():
+            verdict = note.get("confirmed")
+            if verdict is None:
+                for _, other_note in logged[_OTHER_TRACK[tr]].values():
+                    v = (other_note.get("holm_verdicts") or {}).get(k)
+                    if v is not None and v.get("trial_id") == t.trial_id:
+                        verdict = v.get("confirmed")
+            out[k] = None if verdict is None else bool(verdict)
+    return out
+
+
+def _event_holm(
+    conf_p: Mapping[str, float], other_discovered: set[str], other_conf: Mapping[str, float],
+) -> set[str] | None:
+    """Holm rejections across every discovered cell (both tracks), or None while a discovered
+    cell of the other track has no logged confirmation p. NaN p-values count in m."""
+    if any(k not in other_conf for k in other_discovered):
+        return None
+    pvals = {**dict(conf_p), **{k: other_conf[k] for k in other_discovered}}
+    return screen_stats.holm(pvals, EVENT_HOLM_ALPHA) if pvals else set()
+
+
+def _event_confirmed(reject: bool | None, directional_mean: float, net: float) -> bool | None:
+    """Confirmed: Holm rejects, the mean is in the registered direction and positive net of
+    costs (volatility cells: no cost leg, so net == directional mean). None while Holm waits."""
+    if reject is None:
+        return None
+    return bool(reject and math.isfinite(net) and directional_mean > 0 and net > 0)
+
+
+def _event_legs(outcome: str) -> int:
+    """ADR 0005 cost legs: abnormal return 4, raw return 2, volatility none."""
+    return {"abnormal_return": eventstudy.LEGS_ABNORMAL,
+            "raw_return": eventstudy.LEGS_RAW}.get(outcome, 0)
+
+
+def _cfg_label(g: EventConfig | Any) -> str:
+    theta, w, h = g
+    return f"{float(theta):g}/{int(w)}/{int(h)}"
 
 
 # --- backtest ---------------------------------------------------------------------------------
