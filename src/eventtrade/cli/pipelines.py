@@ -336,7 +336,7 @@ def _ingest_gdelt_window(
         echo(f"estimate {_gb(total)}; budget left this month {_gb(left)}"
              f" (of {_gb(cfg.bq_monthly_budget_bytes)}); per-query cap"
              f" {_gb(cfg.bq_max_bytes_per_query)}")
-        if total > left:
+        if total > 0 and total > left:
             echo("estimate exceeds what is left this month: --execute would stop part-way"
                  " and can be resumed next month")
         echo("dry run only; pass --execute to pull")

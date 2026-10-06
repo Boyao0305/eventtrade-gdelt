@@ -33,7 +33,28 @@ p 0.68). Trials in the store: 1,843. Hold-out (≥ 2025-04-01) untouched.
   does not treat `theme_docs` as a day-total metric (`features.DAY_TOTAL_N_METRICS`); fix before
   any `build-dataset`/`signal-study` on themes.
 
-**Open question from the user, not yet answered: intraday horizons (hours/minutes).** Not tested.
+**2026-10-06, after compaction — A2 pull started.** Dry run: 658.57 GB for 2017-09 → 2025-03
+(month-to-date billed 894.67 GB) → ~1,553 GB this month, ~454 GB over the free 1 TiB ≈ $2.6.
+Added `ingest-gdelt --budget-gb` (commit `074ff8e`; ceiling 4,600 GB = free tier + $20 cap) and
+started three concurrent `--execute --budget-gb 1600` pulls over 2017-09→2020-06, 2020-07→2022-12,
+2023-01→2025-03 (logs `pull_t{1,2,3}.log` in the job tmp dir). If interrupted, rerun the same
+commands: stored months are skipped. Budget raised to 1,600 GB for this run only (worst case
+≈ $2.9).
+
+**2026-10-06 — A2 done, null (experiment 0008).** All three pulls finished. "0 to pull" was
+verified (121/121 months); October billed 1,553.29 GB ≈ $2.6 over the free tier. Frozen checkout
+moved to `074ff8e`; `screen --track A --set a2` ran once: joint p_S 0.200, p_M 0.117 → stops;
+8 trials, store total 1,851. **Every ADR 0001 hypothesis is now tested; none passed.** No further
+trial-logging run without a new ADR and the user's input on direction (intraday data, new
+sources).
+- Open: `test_screen_confirms_only_discovered_cells` failed once in a `-k "screen or theme or a2"`
+  run (EB `shrunk_ic` None for a non-commodity cell), then passed 4 times (alone, whole file,
+  same subset twice); pairwise bisect found no leaking test. Treat as a flake to investigate. It
+  cannot change a verdict (EB feeds notes, not the BH discovered set).
+- Fixed on dev after the run: the dry run warned "estimate exceeds what is left" for a 0 GB
+  estimate when the month was over budget.
+
+**Open question from the user, answered on 2026-10-06 (see the final report): intraday horizons (hours/minutes).** Not tested.
 Points for the answer: GDELT updates every 15 minutes and `DATEADDED` has 15-minute resolution,
 so hour-scale is the finest meaningful horizon (minutes are below GDELT's own latency and belong
 to newswire feeds); free intraday history is short (yfinance 1-minute ≈ 30 days, 1-hour ≈ 730
