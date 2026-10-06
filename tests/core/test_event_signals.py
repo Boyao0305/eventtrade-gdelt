@@ -20,10 +20,12 @@ from eventtrade.core.event_signals import (
     WINDOWS,
     EventCell,
     cell_scores,
+    composite_events,
     outcome_groups,
     outcomes,
     shock_scores,
 )
+from eventtrade.core.eventstudy import triggers
 from eventtrade.core.features import Z_CLIP
 from eventtrade.core.labels import make_labels, vol_surprise_label
 from eventtrade.schemas import GDELT_DAILY_COLUMNS, Asset
@@ -480,3 +482,80 @@ def test_outcome_groups_from_assets():
     assert outcome_groups(assets, "A") == {"EWJ": "dm", "USO": "commodity"}
     assert outcome_groups(assets, "B") == {"AAPL": "Information Technology",
                                            "JPM": "Financials"}
+
+
+# --- ADR 0006 composite event (F1) ---------------------------------------------------------------
+
+F1_SIGNALS = ("quad3", "quad4", "root_14", "violence", "tone")
+CDAYS = [d.date() for d in pd.bdate_range("2024-01-01", periods=80)]
+
+# rows (day index, ticker, signal, z) -> expected events (day index, ticker); theta 3, 20-day
+# declustering, members EM1 / EM2. Union of the per-signal fire conditions (family z >= 3, tone
+# z <= -3), ONE declustering per ETF over the union.
+COMPOSITE_CASES = [
+    ("one family shock", [(0, "EM1", "quad3", 3.5)], [(0, "EM1")]),
+    ("exactly theta fires", [(0, "EM1", "violence", 3.0)], [(0, "EM1")]),
+    ("below theta", [(0, "EM1", "quad4", 2.99)], []),
+    ("low tone fires", [(0, "EM1", "tone", -3.0)], [(0, "EM1")]),
+    ("high tone does not", [(0, "EM1", "tone", 3.5)], []),
+    ("negative family z does not", [(0, "EM1", "quad3", -4.0)], []),
+    ("signals outside the composite", [(0, "EM1", "quad1", 5.0), (1, "EM1", "root_163", 5.0),
+                                       (2, "EM1", "quad2", 5.0)], []),
+    ("same day, two signals: one event", [(0, "EM1", "quad3", 3.5), (0, "EM1", "tone", -4.0)],
+     [(0, "EM1")]),
+    ("another signal inside the block is absorbed",
+     [(0, "EM1", "quad3", 3.5), (5, "EM1", "quad4", 4.0), (20, "EM1", "root_14", 4.0)],
+     [(0, "EM1")]),
+    ("first day past the block fires", [(0, "EM1", "quad3", 3.5), (21, "EM1", "violence", 3.1)],
+     [(0, "EM1"), (21, "EM1")]),
+    ("a blocked day does not extend the block",
+     [(0, "EM1", "tone", -3.5), (15, "EM1", "quad3", 4.0), (21, "EM1", "quad4", 3.0)],
+     [(0, "EM1"), (21, "EM1")]),
+    ("per-ETF declustering", [(0, "EM1", "quad3", 3.5), (5, "EM2", "tone", -3.5),
+                              (10, "EM1", "quad4", 3.5), (30, "EM2", "quad3", 3.5)],
+     [(0, "EM1"), (5, "EM2"), (30, "EM2")]),
+    ("non-member ignored", [(0, "DM1", "quad3", 9.0)], []),
+    ("NaN never fires", [(0, "EM1", "quad3", float("nan")), (0, "EM1", "tone", float("nan"))], []),
+    ("NaN on one signal, shock on another", [(3, "EM1", "quad3", float("nan")),
+                                             (3, "EM1", "root_14", 3.2)], [(3, "EM1")]),
+]
+
+
+@pytest.mark.parametrize("name,rows,expected", COMPOSITE_CASES,
+                         ids=[c[0] for c in COMPOSITE_CASES])
+def test_composite_events_union_then_one_declustering(name, rows, expected):
+    scores = pd.DataFrame([(CDAYS[i], t, s, v) for i, t, s, v in rows], columns=SCORE_COLUMNS)
+    scores["date"] = pd.to_datetime(scores["date"])
+    ev = composite_events(scores, ["EM1", "EM2"], F1_SIGNALS, 3.0, 20, CDAYS)
+    assert list(ev.columns) == ["date", "ticker"]
+    got = [(CDAYS.index(d.date()), t) for d, t in zip(ev["date"], ev["ticker"], strict=True)]
+    assert got == sorted(expected), name
+
+
+def test_composite_events_equal_triggers_on_the_max_directional_score():
+    """The union is the max over signals of the directional score (tone negated), declustered
+    once by `eventstudy.triggers`: random panel cross-check."""
+    rng = np.random.default_rng(7)
+    rows = [(d, t, s, rng.normal(0, 1.6)) for d in CDAYS for t in ("EM1", "EM2", "EM3")
+            for s in (*F1_SIGNALS, "quad1")]
+    scores = pd.DataFrame(rows, columns=SCORE_COLUMNS)
+    scores["date"] = pd.to_datetime(scores["date"])
+    ev = composite_events(scores, ["EM1", "EM2", "EM3"], F1_SIGNALS, 3.0, 20, CDAYS)
+    s = scores[scores["signal"].isin(F1_SIGNALS)].copy()
+    s.loc[s["signal"] == "tone", "value"] *= -1
+    best = s.groupby(["date", "ticker"], as_index=False)["value"].max()
+    assert ev.equals(triggers(best, 3.0, 1, 20, CDAYS))
+    assert len(ev) > 3  # the panel exercises the declustering
+    # one declustering over the union: never two events of a ticker within 20 trading days
+    for _, g in ev.groupby("ticker"):
+        pos = [CDAYS.index(d.date()) for d in g["date"]]
+        assert all(b - a > 20 for a, b in itertools.pairwise(pos))
+
+
+def test_composite_events_accepts_assets_and_rejects_unknown_signals():
+    scores = pd.DataFrame([(CDAYS[0], "EM1", "quad3", 4.0)], columns=SCORE_COLUMNS)
+    em = [Asset(ticker="EM1", name="EM1", kind="etf", track="A", group="country",
+                screen_group="em")]
+    assert len(composite_events(scores, em, F1_SIGNALS, 3.0, 20, CDAYS)) == 1
+    with pytest.raises(ValueError, match="unknown"):
+        composite_events(scores, ["EM1"], ("quad3", "nonsense"), 3.0, 20, CDAYS)

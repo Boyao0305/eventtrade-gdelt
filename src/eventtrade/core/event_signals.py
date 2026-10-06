@@ -22,6 +22,9 @@ z >= theta, 'down' (tone, "low tone") when z <= -theta. `cell_scores` turns scor
 directional value v that fires when v >= theta, applying the Track B tone split. Declustering
 (20 days), the calendar-time portfolio and the statistics live elsewhere.
 
+ADR 0006 (follow-up F1): `composite_events` fires an ETF when ANY of several Track A signals
+shocks (each in its own trigger direction) and declusters that union once per ETF.
+
 Outcomes (`outcomes`, entered at t+1 open, as everywhere), per (date t, ticker, horizon h):
 
 - `raw_return`      = ret_oo(h) = adj_open[t+1+h] / adj_open[t+1] - 1 (`labels.make_labels`).
@@ -54,15 +57,16 @@ JUDGEMENT CALLS (not fixed by ADR 0005; chosen before any event-study value was 
 | trailing leg of abnormal vol | close-to-close t-21..t, known at t (A4 v2 label's leg) |
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from itertools import product
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
+from eventtrade.core.eventstudy import triggers
 from eventtrade.core.features import MetricSpec, build_features, feature_name
 from eventtrade.core.labels import SURPRISE_TRAILING_DAYS, make_labels
 from eventtrade.core.labels import _ln_rms as ln_rms
@@ -72,8 +76,8 @@ from eventtrade.schemas import GDELT_DAILY_COLUMNS, Asset, Track
 
 __all__ = [
     "CELLS", "GRID", "HORIZONS", "MIN_PERIODS", "OUTCOMES", "OUTCOME_COLUMNS", "SCORE_COLUMNS",
-    "SIGNALS", "THETAS", "WINDOWS", "EventCell", "cell_scores", "outcome_groups", "outcomes",
-    "shock_scores",
+    "SIGNALS", "THETAS", "WINDOWS", "EventCell", "cell_scores", "composite_events",
+    "outcome_groups", "outcomes", "shock_scores",
 ]
 
 # --- grid (ADR 0005 "Nested optimization") -------------------------------------------------------
@@ -217,6 +221,31 @@ def cell_scores(scores: pd.DataFrame, cell: EventCell) -> pd.DataFrame:
         keep = s["tone"] < 0 if cell.split == "negative" else s["tone"] >= 0
         s = s[keep][["date", "ticker", "value"]]
     return s.sort_values(["date", "ticker"], ignore_index=True)
+
+
+def composite_events(
+    scores: pd.DataFrame, assets_em: Iterable[str | Asset], signals: Sequence[str],
+    theta: float, decluster_days: int, trading_days: Sequence[Any],
+) -> pd.DataFrame:
+    """ADR 0006 composite event: declustered [date, ticker] of the union of `signals`' shocks.
+
+    An ETF of `assets_em` (tickers or Assets) fires on day t if ANY of `signals` shocks: a
+    family share z >= theta, or tone z <= -theta (each signal's ADR 0005 trigger direction, as in
+    `cell_scores`). The union is the max over the signals of the directional score; it is then
+    declustered ONCE per ETF by `eventstudy.triggers` (no new event within `decluster_days`
+    trading days of the last, whichever signal fired). NaN scores never fire.
+    """
+    unknown = [s for s in signals if s not in SIGNALS["A"]]
+    if unknown:
+        raise ValueError(f"unknown Track A signal(s) {unknown}; known: {SIGNALS['A']}")
+    members = {a.ticker if isinstance(a, Asset) else a for a in assets_em}
+    s = scores[scores["signal"].isin(list(signals)) & scores["ticker"].isin(members)]
+    s = s[["date", "ticker", "signal", "value"]].copy()
+    s["value"] = pd.to_numeric(s["value"], errors="coerce").astype(float)
+    s.loc[s["signal"].map(_trigger) == "down", "value"] *= -1.0
+    s["date"] = pd.to_datetime(s["date"])
+    union = s.groupby(["date", "ticker"], as_index=False, sort=True)["value"].max()
+    return triggers(union, theta, 1, decluster_days, trading_days)
 
 
 # --- outcomes ------------------------------------------------------------------------------------

@@ -50,3 +50,18 @@ instruments, which this project does not have. A fail closes the volatility line
 - *Choosing the configuration with the best discovery t*: the modal-selection rule is fixed and
   does not reward the single best cell.
 - *Using the hold-out*: reserved for strategies that pass gates 1–3.
+
+## Amendment (2026-10-06, before the F1 run): correction of a description
+
+The Decision describes the modal-selection count incorrectly. ADR 0005 has **eight** EM E3 cells
+(seven families plus low tone), not seven. Their discovery (2015-03-02 → 2019-12-31) selections,
+read from the logged trials: quad1, quad2, root_14 (protest), tone → 3/60/20; quad4, root_163
+(sanctions), violence → 2.5/60/20; quad3 → 3/120/20. So 3/60/20 is chosen by 4 of 8 cells,
+2.5/60/20 by 3 and 3/120/20 by 1. The modal configuration is still θ = 3, W = 60, h = 20.
+**No rule changes**: the assets, composite event, configuration, outcome, statistic, test, pass
+rule and the single F1 trial are as stated above.
+
+Implementation note: "one trial" is enforced on the hypothesis. Once any trial with hypothesis
+`F1` is logged, `followup --id F1` reads and computes nothing and prints the stored verdict,
+whatever the n_boot, seed, features version or EM members. n_boot is fixed at 2,000 and is not a
+CLI option.

@@ -66,6 +66,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 screen_set=args.screen_set)
     if cmd == "event-study":
         return pipelines.event_study(cfg, store, args.track, now, n_boot=args.n_boot)
+    if cmd == "followup":
+        return pipelines.followup_f1(cfg, store, now)  # --id F1 only; n_boot fixed at 2000
     if cmd == "backtest":
         return pipelines.backtest(cfg, store, args.track, now, feature=args.feature,
                                   sign=args.sign, model=args.model, model_features=args.features,
@@ -135,6 +137,11 @@ def _parser() -> argparse.ArgumentParser:
                    help="placebo-date draws for each cell's max-t p and each confirmation p"
                         f" (2000; at least {pipelines.EVENT_MIN_N_BOOT}; part of each trial's"
                         " identity)")
+
+    s = sub.add_parser("followup", help="one pre-registered follow-up test (ADR 0006 F1: EM"
+                                        " conflict shocks -> abnormal volatility); logs one trial")
+    # No --n-boot: ADR 0006 fixes 2,000 draws, and one F1 trial is ever logged.
+    s.add_argument("--id", choices=pipelines.FOLLOWUP_IDS, required=True, dest="followup_id")
 
     s = sub.add_parser("backtest", help="backtest a rule feature or a model; logs a trial")
     s.add_argument("--track", choices=("A", "B"), required=True)

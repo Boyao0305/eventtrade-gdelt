@@ -536,3 +536,48 @@ run, so no trial carries the old construction.
   creating extra Google accounts to multiply the free tier (against Google's terms).
 - Next: experiment 0006 from the event-study output; if any cell is confirmed, gate 2/3 as a
   combined event portfolio, then the hold-out once.
+
+## 2026-10-06 — ADR 0006 follow-up F1 implemented (not run)
+
+- `event_signals.composite_events`: union of the per-signal fire conditions (family z >= theta,
+  tone z <= -theta) as the per-day max directional score, then ONE `eventstudy.triggers`
+  declustering per ETF. Case table (15 cases) + a random-panel cross-check against `triggers`.
+- `pipelines.followup_f1` / CLI `followup --id F1 [--n-boot N>=999]`: reuses `shock_scores`
+  (W = 60, EM assets only), `outcomes` (abnormal vol, h = 20, EM group median),
+  `_event_eval` (window + embargo, calendar-time series, NW t), `_event_confirm_test`
+  (`placebo_p`, one-sided +), `_event_settings`, `_members_hash`, `_log_trial`. One trial,
+  hypothesis `F1`, data window 2020-01-01..2025-03-31. The trial id is computed before any
+  data is read; if it is logged, the rerun prints the stored verdict and reads nothing.
+- Judgement calls (not in ADR 0006 text): declustering runs over the whole dev period and the
+  events are then windowed, as ADR 0005's confirmation does (an event late in 2019 can block
+  early-2020 dates); an inconclusive result is still logged as the one trial (verdict
+  `inconclusive`, p null) since the test was run.
+- Tests only on synthetic stores (`tests/cli/test_followup.py`): single trial with every fixed
+  setting, rerun idempotent and not recomputed, hold-out never read, refusal for n_boot < 999
+  (pipeline and CLI), inconclusive path, verdict case table. No statistic was computed on real
+  data; the real run must be done from a frozen checkout (CLAUDE.md).
+
+## 2026-10-06 — F1 review fixes
+
+- **Fixed (major): F1 could be logged more than once.** The once-only guard matched the exact
+  trial id, which includes n_boot, seed, features_version and members_hash, so
+  `followup --id F1 --n-boot 1000` after a 999 run recomputed the test and logged a second F1
+  trial. I reproduced this on the synthetic fixture: 2 F1 trials. Fix: `followup_f1` now checks for
+  ANY trial with hypothesis `F1` before reading assets, prices or GDELT. If one exists, it prints
+  the first (stored) verdict with its own n_boot/seed, warns if more than one exists, and logs
+  nothing. n_boot is pinned: there is a new constant `F1_N_BOOT = 2000`, `followup_f1` has no
+  n_boot parameter, and the CLI has no `--n-boot` (passing it exits 2). Regression tests in
+  `tests/cli/test_followup.py`: a second run after changing n_boot, seed, features version or EM
+  members logs nothing and reads nothing (the reads are booby-trapped). There are also tests that
+  any `--n-boot` is a CLI usage error and that `F1_N_BOOT == 2000`. Tests monkeypatch
+  `F1_N_BOOT` to 999 for speed.
+- **Fixed (minor, docs only): ADR 0006 miscounted the modal-selection cells.** A read-only query
+  of the logged 2015–2019 discovery trials (selected configs only, no statistic computed) gave
+  8 EM E3 cells: 3/60/20 x4 (quad1, quad2, root_14, tone), 2.5/60/20 x3 (quad4, root_163,
+  violence), 3/120/20 x1 (quad3). The modal configuration is still 3/60/20, so the code is
+  unchanged. I added a dated Amendment to ADR 0006 that corrects the description and states that
+  no rule changes. It also notes the hypothesis-level once-only guard.
+- Docs updated: README `followup` row, `docs/components/cli.md`. Verification: full fast suite
+  1275 passed (8 slow deselected), lint-imports 6/6 contracts kept, and ruff is clean on the
+  touched files. The 10 remaining ruff findings are in untouched files
+  (`adapters/prices.py`, `adapters/store.py`, `tests/adapters/test_store.py`).

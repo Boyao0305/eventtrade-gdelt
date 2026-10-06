@@ -1587,6 +1587,144 @@ def _cfg_label(g: EventConfig | Any) -> str:
     return f"{float(theta):g}/{int(w)}/{int(h)}"
 
 
+# --- pre-registered follow-up F1 (ADR 0006) ----------------------------------------------------
+
+# Every setting is fixed by ADR 0006; changing any of them is a new ADR (and a new trial id).
+F1_HYPOTHESIS = "F1"
+F1_GROUP = "em"
+F1_SIGNALS = ("quad3", "quad4", "root_14", "violence", "tone")
+F1_THETA = 3.0
+F1_W = 60
+F1_H = 20
+F1_OUTCOME = "abnormal_vol"
+F1_SIGN = 1.0
+F1_ALPHA = 0.05
+F1_WINDOW = (date(2020, 1, 1), date(2025, 3, 31))  # inclusive event dates, embargoed for h
+F1_N_BOOT = 2000  # ADR 0006: fixed, not a CLI option (another n_boot would be another draw)
+FOLLOWUP_IDS = (F1_HYPOTHESIS,)  # `followup --id` choices
+
+
+def followup_f1(cfg: Config, store: Store, now: Clock, echo: Echo = print) -> int:
+    """ADR 0006 follow-up F1: EM conflict shocks -> 20-day abnormal volatility, one test.
+
+    EM ETFs (`screen_group` 'em') fire on the composite event (`event_signals.composite_events`:
+    quad3, quad4, root_14 or violence share z >= 3, or tone z <= -3, W = 60; one 20-day
+    declustering per ETF over the union, computed over the whole dev period as in ADR 0005).
+    Events dated in F1_WINDOW, embargoed so their outcome ends by its last day (`_event_eval`),
+    give the calendar-time mean and NW t of ADR 0005 abnormal volatility at h = 20. With >= 30
+    events and >= 30 event dates the one-sided (+) placebo-date p (`eventstudy.placebo_p`,
+    F1_N_BOOT = 2,000 draws, seed `cfg.seed`; not a parameter) decides: "pass" iff p < 0.05 and
+    mean > 0, else "fail"; otherwise "inconclusive" and no p. Exactly one `signal` trial
+    (hypothesis F1) is ever logged: if ANY trial with hypothesis F1 exists, whatever its params
+    (n_boot, seed, features version, members), nothing is read or computed or logged and the
+    stored verdict is printed. REFUSED if F1_N_BOOT < 999 or the window reaches the hold-out;
+    MISSING without EM assets, prices or GDELT rows. Every read ends at `cfg.holdout_start`
+    (half-open).
+    """
+    n_boot = F1_N_BOOT
+    if n_boot < EVENT_MIN_N_BOOT:
+        echo(f"refused: n_boot {n_boot} < {EVENT_MIN_N_BOOT} (ADR 0006)")
+        return REFUSED
+    if F1_WINDOW[1] >= cfg.holdout_start or F1_WINDOW[0] < cfg.start:
+        echo(f"refused: F1 window {F1_WINDOW[0]}..{F1_WINDOW[1]} is not inside the dev period"
+             f" {cfg.start}..{cfg.holdout_start} (the hold-out is not used; ADR 0001, 0006)")
+        return REFUSED
+    # Once-only guard on the hypothesis, not the trial id: the id depends on n_boot, seed,
+    # features version and members, so matching it would let another setting re-draw the test.
+    prior = [t for t in store.read_trials() if t.hypothesis == F1_HYPOTHESIS]
+    if prior:
+        stored = prior[0]
+        note = json.loads(stored.notes)
+        sp = stored.params
+        echo(f"F1: {note.get('verdict')} (already logged as {stored.trial_id}; nothing"
+             " recomputed; ADR 0006 allows one F1 trial)")
+        _f1_report(echo, note, sp.get("n_boot", "?"), sp.get("seed", "?"))
+        if len(prior) > 1:
+            echo(f"  warning: {len(prior)} F1 trials are logged; the first one"
+                 f" ({stored.trial_id}) is the test")
+        echo("0 new trials logged")
+        return OK
+    assets = store.read_assets("A")
+    groups = {t: g for t, g in event_signals.outcome_groups(assets, "A").items()
+              if g == F1_GROUP}
+    if not groups:
+        echo(f"no Track A asset with screen_group '{F1_GROUP}': run `load-universe --track A`")
+        return MISSING
+    members = tuple(sorted(groups))
+    params = _f1_params(members, n_boot, cfg.seed)
+    tid = trial_id("signal", "A", params, *F1_WINDOW)
+
+    em_assets = [a for a in assets if a.ticker in groups]
+    prices = store.read_prices(list(members), cfg.start, cfg.holdout_start)
+    if prices.empty:
+        echo("no prices for the EM ETFs: run `ingest-prices --track A`")
+        return MISSING
+    tdays = _trading_days(prices)
+    daily = _read_event_gdelt(store, "A", em_assets, cfg.start, cfg.holdout_start)
+    if daily.empty:
+        echo("no GDELT event rows for the EM ETFs' countries: run `ingest-gdelt events`")
+        return MISSING
+    hold = pd.Timestamp(cfg.holdout_start)
+    scores = _before(event_signals.shock_scores(daily, tdays, em_assets, "A", F1_W), hold)
+    events = event_signals.composite_events(scores, list(members), F1_SIGNALS, F1_THETA,
+                                            EVENT_DECLUSTER_DAYS, tdays)
+    oc = event_signals.outcomes(prices, groups, [F1_H], tdays)
+    oc = oc.loc[(oc["outcome"] == F1_OUTCOME) & (oc["date"] < hold),
+                ["date", "ticker", "value"]].reset_index(drop=True)
+    e = _event_eval(events, oc, F1_H, F1_SIGN, F1_WINDOW, tdays)
+    p = math.nan
+    conf_test: dict[str, Any] = {"test": EVENT_NULL, "p": None}
+    if e.sufficient:
+        pr = _event_confirm_test(e, events, oc, F1_H, F1_SIGN, tdays, n_boot, cfg.seed)
+        p = float(pr.p)
+        conf_test = pr.notes()
+    verdict = _f1_verdict(e.sufficient, p, e.mean)
+    note = {**_eval_note(e), "verdict": verdict, "p_one_sided": _num(p),
+            "conf_test": conf_test, "alpha": F1_ALPHA, "outcome": F1_OUTCOME,
+            "min_events": eventstudy.MIN_EVENTS, "min_event_days": eventstudy.MIN_EVENT_DAYS,
+            "n_members": len(members), "adr": "0006"}
+    logged = {t.trial_id for t in store.read_trials("A", "signal")}
+    _log_trial(store, logged, "A", "signal", F1_HYPOTHESIS, params, *F1_WINDOW, now, note)
+    echo(f"F1: {verdict} (trial {tid})")
+    _f1_report(echo, note, n_boot, cfg.seed)
+    echo("1 new trial logged")
+    return OK
+
+
+def _f1_params(members: tuple[str, ...], n_boot: int, seed: int) -> dict[str, Any]:
+    """Trial params, hence identity: every fixed ADR 0006 setting plus n_boot, null, seed,
+    features version and the members hash."""
+    return {"hypothesis": F1_HYPOTHESIS, "group": F1_GROUP, "signals": list(F1_SIGNALS),
+            "theta": F1_THETA, "window": F1_W, "horizon": F1_H,
+            "decluster_days": EVENT_DECLUSTER_DAYS, "outcome": F1_OUTCOME,
+            "expected_sign": F1_SIGN, "period": "confirmation", "alpha": F1_ALPHA,
+            "min_events": eventstudy.MIN_EVENTS, "min_event_days": eventstudy.MIN_EVENT_DAYS,
+            **_event_settings(n_boot, seed), "members_hash": _members_hash(members)}
+
+
+def _f1_verdict(sufficient: bool, p: float, mean: float) -> str:
+    """ADR 0006: 'inconclusive' below 30 events / 30 event dates; 'pass' iff p < 0.05 and
+    mean > 0; otherwise 'fail' (an undefined p or mean fails)."""
+    if not sufficient:
+        return "inconclusive"
+    ok = math.isfinite(p) and math.isfinite(mean) and p < F1_ALPHA and mean > 0
+    return "pass" if ok else "fail"
+
+
+def _f1_report(echo: Echo, note: Mapping[str, Any], n_boot: object, seed: object) -> None:
+    def val(k: str) -> float:
+        return _note_float(note, k)
+
+    echo(f"  EM ETFs {note.get('n_members')}, signals {'/'.join(F1_SIGNALS)},"
+         f" theta {F1_THETA:g}, W {F1_W}, h {F1_H}, events dated"
+         f" {note['event_dates'][0]}..{note['event_dates'][1]}")
+    echo(f"  events {note['n_events']} on {note['n_event_days']} dates"
+         f" (need {eventstudy.MIN_EVENTS} and {eventstudy.MIN_EVENT_DAYS}),"
+         f" mean abnormal vol {_fmt(val('mean'), 0, 4).strip()}, NW t {_fmt(val('t'), 0, 2).strip()},"
+         f" one-sided placebo-date p {_fmt(val('p_one_sided'), 0, 4).strip()}"
+         f" ({n_boot} draws, seed {seed}); pass iff p < {F1_ALPHA} and mean > 0")
+
+
 # --- backtest ---------------------------------------------------------------------------------
 
 def backtest(
