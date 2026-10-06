@@ -581,3 +581,16 @@ run, so no trial carries the old construction.
   1275 passed (8 slow deselected), lint-imports 6/6 contracts kept, and ruff is clean on the
   touched files. The 10 remaining ruff findings are in untouched files
   (`adapters/prices.py`, `adapters/store.py`, `tests/adapters/test_store.py`).
+
+## 2026-10-06 — resume point 4
+
+- ADR 0005 event study: null on all 47 cells (experiment 0006, 1,504 trials).
+- ADR 0006 F1 follow-up (data-suggested EM conflict -> abnormal vol): run once from frozen
+  checkout `344d4bf` after a verified suite (1,275 passed, run in foreground chunks because a
+  background run was reaped for low memory). Result: fail, mean -0.0051, t -0.57, p 0.678
+  (experiment 0007). F1 can never be re-run (guard on hypothesis).
+- Trials in the store: 1,843. Every pre-registered hypothesis except A2 is tested and null.
+- Remaining: A2 theme screen, runnable once the GKG theme pull completes (Nov free tier, or
+  ~$5 with billing — user's call, still open). Open question also: private GitHub backup.
+- Lesson: on this machine, run the full suite in foreground chunks (<10 min each); long
+  background shells get reaped under memory pressure.
