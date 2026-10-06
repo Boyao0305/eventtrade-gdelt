@@ -517,3 +517,22 @@ run, so no trial carries the old construction.
   - `test_placebo_p_absorbs_a_common_drift` now checks 8 panels (median z > 3, median p > 0.2,
     every null mean > 2) instead of one fixture. The new event generator draws from a
     different random stream, and the old single fixture landed at z = 2.0.
+
+## 2026-10-06 — resume point 3
+
+- A2 theme screen committed (`1ebd019`), not runnable until the GKG theme pull is complete
+  (stored through 2017-08; October budget exhausted at 894.7/900 GB; resume in November or after
+  the user enables billing — the user was asked, no answer yet).
+- ADR 0005 (extreme-shock event study, 47 cells x 32 configurations, nested optimization)
+  pre-registered (`487564c`), amended before any result (`73229b8`: placebo-date discovery null,
+  >= 30 events and >= 30 event dates). Implementation committed `ba718c2` after review; simulated
+  size 2.4-4.7% at 5%; a hanging confirmation sampler and an oversized sparse confirmation were
+  fixed.
+- In flight: `event-study` A -> B -> A from the frozen checkout `.claude/worktrees/gdelt-snap`
+  at `ba718c2` (script `tmp/run_es.sh`, logs `tmp/es_*.log`). Rerunning is safe: trial ids are
+  deterministic and logged trials are skipped.
+- Open questions to the user: push the repo to a private GitHub remote for backup (it has no
+  remote); pay ~$5 for the remaining theme pull or wait for November's free tier. Advised against
+  creating extra Google accounts to multiply the free tier (against Google's terms).
+- Next: experiment 0006 from the event-study output; if any cell is confirmed, gate 2/3 as a
+  combined event portfolio, then the hold-out once.
