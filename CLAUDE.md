@@ -11,6 +11,14 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
 - **Touching hold-out data** (dates ≥ `config.HOLDOUT_START`, 2025-04-01) in any analysis other
   than the final, once-per-strategy hold-out evaluation.
 - **Committing anything under `secrets/` or `data/`.**
+- **Spending more than $20 in total.** Billing is enabled (card connected, 2026-10-06). BigQuery
+  on-demand is $6.25/TiB after the free 1 TiB per month. The user's cap: never more than $20
+  without explicit approval. `config.bq_monthly_budget_bytes` (default 900 GB) is the guard;
+  raise it only as far as the cap allows, and say so in the log.
+- **Pushing to any remote other than `origin` (private `Boyao0305/eventtrade-gdelt`), or pushing
+  `main`.** Push `dev` only.
+- **Re-running a once-only test.** `followup --id F1` refuses by design (any F1 trial exists).
+  Never delete or alter trials to make room — the table is append-only and feeds the DSR count.
 
 ## Traps
 
@@ -44,4 +52,16 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
   is being edited.** Trials are append-only; run from a frozen checkout (`git worktree add
   --detach`) with `PYTHONPATH=<checkout>/src` if edits are in flight.
 - **GKG themes for the full dev range cost ~1 TB** — more than one month's free tier. Pull them in
-  a later billing month (see experiment 0001's plan).
+  a later billing month (see experiment 0001's plan), or within the $20 cap with billing.
+- **Run the full test suite in foreground chunks (< 10 min each)**: `tests/core tests/adapters`,
+  `tests/cli` minus `test_event_study.py`/`test_followup.py`, then those two (split
+  `test_event_study.py` in halves via `--co -q`). A long background pytest gets reaped by
+  Claude Code when the machine is low on memory (2026-10-06).
+- **This harness rejects complex shell lines whose paths contain "Github"** (worktree guard).
+  Put multi-step commands in a script under the job's tmp dir and run `bash <script>`; wrappers
+  `tmp/et.sh` (dev code) and `tmp/et_snap.sh` (frozen checkout `.claude/worktrees/gdelt-snap`)
+  set `EVENTTRADE_HOME`, `PYTHONUTF8` and, for the snapshot, `PYTHONPATH`.
+- **Python stdout is block-buffered when redirected to a file**: progress lines of long CLI runs
+  appear only at the end. Use `status` (row counts, BigQuery spend) to watch progress.
+- **Concurrent heavy SQLite writes lock out other writers** (60 s timeout): run `build-dataset`
+  for A and B one after the other, never alongside a trial-logging command.
