@@ -45,7 +45,10 @@ def test_ingest_prices_into_holdout_is_refused(tmp_path: Path):
 
 
 @pytest.mark.parametrize("argv", [["backtest", "--track", "A"], ["nope"],
-                                  ["ingest-gdelt", "events", "--start", "2024-13-01"]])
+                                  ["ingest-gdelt", "events", "--start", "2024-13-01"],
+                                  ["ingest-gdelt", "events", "--budget-gb", "0"],
+                                  ["ingest-gdelt", "events", "--budget-gb", "4601"],
+                                  ["ingest-gdelt", "events", "--budget-gb", "1.5"]])
 def test_usage_errors_exit_2(tmp_path: Path, argv):
     with pytest.raises(SystemExit) as e:
         cli.main(["--home", str(tmp_path), *argv])
@@ -86,3 +89,24 @@ def test_screen_usage_errors_exit_2(tmp_path: Path, argv):
     with pytest.raises(SystemExit) as e:
         cli.main(["--home", str(tmp_path), *argv])
     assert e.value.code == 2
+
+
+def test_budget_gb_overrides_monthly_budget_for_ingest_only(tmp_path: Path, monkeypatch):
+    seen = {}
+
+    def fake_gdelt(cfg, store):
+        seen["budget"] = cfg.bq_monthly_budget_bytes
+        return object()
+
+    def fake_ingest(cfg, store, gdelt, *rest):
+        seen["cfg_budget"] = cfg.bq_monthly_budget_bytes
+        return 0
+
+    monkeypatch.setattr(cli, "_gdelt", fake_gdelt)
+    monkeypatch.setattr(cli.pipelines, "ingest_gdelt", fake_ingest)
+    cli.main(["--home", str(tmp_path), "init-db"])
+    assert cli.main(["--home", str(tmp_path), "ingest-gdelt", "gkg-themes",
+                     "--budget-gb", "1600"]) == 0
+    assert seen == {"budget": 1600 * 10**9, "cfg_budget": 1600 * 10**9}
+    assert cli.main(["--home", str(tmp_path), "ingest-gdelt", "gkg-themes"]) == 0
+    assert seen["budget"] == 900 * 10**9  # default unchanged without the flag

@@ -19,6 +19,9 @@ from eventtrade.config import Config
 
 _DATASETS = ("events", "gkg-themes", "gkg-orgs")
 _MODELS = ("ridge", "logistic", "lgbm")
+# Hard ceiling for `ingest-gdelt --budget-gb`: the user's $20 spending cap (CLAUDE.md) on top of
+# the free 1 TiB/month, at $6.25/TiB, is 1 TiB + 3.2 TiB = 4,617 GB; rounded down.
+BQ_BUDGET_CEILING_GB = 4600
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -53,6 +56,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                                        args.start, args.end, prices.sanity_check)
     if cmd == "ingest-gdelt":
         from eventtrade.adapters.gdelt_bq import BudgetExceeded
+
+        if args.budget_gb is not None:
+            cfg = cfg.model_copy(update={"bq_monthly_budget_bytes": args.budget_gb * 10**9})
 
         return pipelines.ingest_gdelt(cfg, store, _gdelt(cfg, store), args.dataset, args.start,
                                       args.end, args.execute, False, now,
@@ -113,6 +119,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="last session date, inclusive; must be before the hold-out")
     s.add_argument("--execute", action="store_true",
                    help="actually run the queries (default: dry run, estimate only)")
+    s.add_argument("--budget-gb", type=_budget_gb, default=None, dest="budget_gb",
+                   help="month-to-date BigQuery budget for this run, in GB (default: config 900;"
+                        f" at most {BQ_BUDGET_CEILING_GB}, the $20 cap over the free tier)")
 
     s = sub.add_parser("build-dataset", help="features + labels for one track, dev period")
     s.add_argument("--track", choices=("A", "B"), required=True)
@@ -208,6 +217,14 @@ def _now() -> datetime:
 
 def _date(s: str) -> date:
     return date.fromisoformat(s)
+
+
+def _budget_gb(s: str) -> int:
+    """`--budget-gb`: a positive whole number of GB, never above the spending-cap ceiling."""
+    n = int(s)
+    if not 1 <= n <= BQ_BUDGET_CEILING_GB:
+        raise argparse.ArgumentTypeError(f"must be 1..{BQ_BUDGET_CEILING_GB}, got {n}")
+    return n
 
 
 def _screen_n_boot(s: str) -> int:
