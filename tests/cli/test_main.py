@@ -110,3 +110,41 @@ def test_budget_gb_overrides_monthly_budget_for_ingest_only(tmp_path: Path, monk
     assert seen == {"budget": 1600 * 10**9, "cfg_budget": 1600 * 10**9}
     assert cli.main(["--home", str(tmp_path), "ingest-gdelt", "gkg-themes"]) == 0
     assert seen["budget"] == 900 * 10**9  # default unchanged without the flag
+
+
+@pytest.mark.parametrize("argv", [["ingest-gdelt-15min"], ["ingest-gdelt-15min", "gkg-orgs"],
+                                  ["ingest-gdelt-15min", "events", "--start", "2016-02-30"],
+                                  ["ingest-gdelt-15min", "orgs", "--budget-gb", "0"],
+                                  ["ingest-gdelt-15min", "orgs", "--budget-gb", "4601"]])
+def test_ingest_gdelt_15min_usage_errors_exit_2(tmp_path: Path, argv):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--home", str(tmp_path), *argv])
+    assert e.value.code == 2
+
+
+def test_ingest_gdelt_15min_wiring_and_budget_override(tmp_path: Path, monkeypatch):
+    from datetime import date
+
+    from eventtrade.cli import pipelines_intraday
+
+    seen = {}
+
+    def fake_gdelt(cfg, store):
+        seen["budget"] = cfg.bq_monthly_budget_bytes
+        return "gdelt"
+
+    def fake_ingest(cfg, store, istore, gdelt, dataset, start, end, execute, now, err):
+        seen.update(gdelt=gdelt, dataset=dataset, start=start, execute=execute,
+                    istore=istore.path.name, err=err.__name__)
+        return 0
+
+    monkeypatch.setattr(cli, "_gdelt", fake_gdelt)
+    monkeypatch.setattr(pipelines_intraday, "ingest_gdelt_15min", fake_ingest)
+    cli.main(["--home", str(tmp_path), "init-db"])
+    assert cli.main(["--home", str(tmp_path), "ingest-gdelt-15min", "orgs", "--budget-gb", "1200",
+                     "--start", "2016-01-01"]) == 0
+    assert seen == {"budget": 1200 * 10**9, "gdelt": "gdelt", "dataset": "orgs",
+                    "start": date(2016, 1, 1), "execute": False, "istore": "intraday.sqlite",
+                    "err": "BudgetExceeded"}
+    assert cli.main(["--home", str(tmp_path), "ingest-gdelt-15min", "events", "--execute"]) == 0
+    assert seen["budget"] == 900 * 10**9 and seen["dataset"] == "events" and seen["execute"]

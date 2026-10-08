@@ -300,6 +300,8 @@ PULL_QUERIES = {
     "gkg_themes_daily": {"cutoff_et": "15:30", "themes": ["A"]},
     "gkg_themes_country_daily": {"cutoff_et": "15:30", "themes": ["A"]},
     "gkg_orgs_daily": {"cutoff_et": "15:30", "aliases": ["a"]},
+    "events_15min": {"countries": ["JA"]},
+    "gkg_orgs_15min": {"aliases": ["a"], "alias_tickers": ["A"]},
     "session_date_check": {"cutoff_et": "15:30", "dateadded": [20250310193000]},
     "partition_probe": {},
     "lag_sample": {},
@@ -419,3 +421,143 @@ def test_bigquery_dry_runs_compile_and_scale() -> None:
     )
     assert 0 < one < month
     assert bq.estimate("events_daily", D, D, cutoff_et="15:30") > 0
+
+
+@pytest.mark.slow
+def test_bigquery_15min_dry_runs_compile() -> None:
+    bq = _real_bq()
+    assert bq.estimate("events_15min", D, D, countries=["JA"]) > 0
+    assert bq.estimate("gkg_orgs_15min", D, D, aliases=["apple inc"], alias_tickers=["AAPL"]) > 0
+
+
+# --- ADR 0007: 15-minute queries ------------------------------------------------------------
+
+
+def _code(name: str) -> str:
+    """SQL text without comments, whitespace collapsed."""
+    sql = (QUERIES_DIR / f"{name}.sql").read_text(encoding="utf-8")
+    return " ".join(" ".join(line.split("--")[0] for line in sql.splitlines()).split())
+
+
+def test_events_15min_binding_has_lookback_partitions_and_no_cutoff() -> None:
+    client = FakeClient(estimate=1)
+    _, billed = _bq(client, FakeUsage(), lookback=30).pull_events_15min(
+        date(2016, 1, 1), date(2016, 12, 31), ["JA", " GM", "JA"]
+    )
+    p, t = _params(client.calls[1][1]), _types(client.calls[1][1])
+    assert p["countries"] == ["GM", "JA"] and t["countries"] == "STRING"
+    assert (p["start"], p["end"]) == (date(2016, 1, 1), date(2016, 12, 31))
+    # SQLDATE partitions: reach back the lookback; never past the last ET day (hold-out safe).
+    assert (p["ev_part_start"], p["ev_part_end"]) == (date(2015, 12, 2), date(2016, 12, 31))
+    assert p["lookback_days"] == 30 and t["lookback_days"] == "INT64"
+    assert "cutoff_et" not in p
+    assert billed == MIB10  # the fake bills at least 10 MiB
+    assert client.calls[1][0] == (QUERIES_DIR / "events_15min.sql").read_text(encoding="utf-8")
+
+
+def test_events_15min_partition_end_stays_before_holdout() -> None:
+    client = FakeClient(estimate=1)
+    _bq(client, FakeUsage()).estimate(
+        "events_15min", date(2025, 1, 1), date(2025, 3, 31), countries=["JA"]
+    )
+    assert _params(client.calls[0][1])["ev_part_end"] == date(2025, 3, 31)
+
+
+def test_orgs_15min_binding_parallel_arrays_and_utc_day_partitions() -> None:
+    client = FakeClient(estimate=1)
+    _bq(client, FakeUsage()).pull_orgs_15min(
+        D,
+        D,
+        ["Apple Inc", "apple", "alphabet", "alphabet", "apple"],
+        ["AAPL", "AAPL", "GOOG", "GOOGL", "AAPL"],
+    )
+    p, t = _params(client.calls[1][1]), _types(client.calls[1][1])
+    pairs = list(zip(p["aliases"], p["alias_tickers"], strict=True))
+    # lower-cased, duplicate pairs dropped, still aligned; a shared alias counts for both tickers
+    assert pairs == [
+        ("alphabet", "GOOG"),
+        ("alphabet", "GOOGL"),
+        ("apple", "AAPL"),
+        ("apple inc", "AAPL"),
+    ]
+    assert t["aliases"] == "STRING" and t["alias_tickers"] == "STRING"
+    assert (p["gkg_part_start"], p["gkg_part_end"]) == (D, D)
+
+
+def test_orgs_15min_rejects_mismatched_or_empty_arrays_before_any_query() -> None:
+    client = FakeClient(estimate=1)
+    bq = _bq(client, FakeUsage())
+    with pytest.raises(ValueError, match="alias_tickers"):
+        bq.pull_orgs_15min(D, D, ["a", "b"], ["A"])
+    with pytest.raises(ValueError, match="same length"):
+        bq.estimate("gkg_orgs_15min", D, D, aliases=["a", "b"], alias_tickers=["A"])
+    with pytest.raises(ValueError):
+        bq.pull_orgs_15min(D, D, [" "], ["A"])
+    with pytest.raises(ValueError):
+        bq.pull_events_15min(D, D, [])
+    assert client.calls == []
+
+
+def test_15min_pulls_go_through_the_budget_guard() -> None:
+    client, usage = FakeClient(estimate=60 * 10**9), FakeUsage()
+    with pytest.raises(BudgetExceeded, match="per-query cap"):
+        _bq(client, usage).pull_orgs_15min(D, D, ["a"], ["A"])
+    assert len(client.calls) == 1 and client.calls[0][1].dry_run
+    client, usage = FakeClient(estimate=1 * 10**9), FakeUsage(spent=895 * 10**9)
+    _bq(client, usage).pull_events_15min(D, D, ["JA"])
+    assert client.calls[1][1].maximum_bytes_billed == 5 * 10**9
+    assert [(u.query_name, u.dry_run) for u in usage.rows] == [
+        ("events_15min", True),
+        ("events_15min", False),
+    ]
+
+
+def test_15min_output_columns_and_dtypes() -> None:
+    from eventtrade.adapters.intraday_store import EVENTS_15MIN_COLUMNS, ORGS_15MIN_COLUMNS
+
+    rows = pd.DataFrame(
+        [["JA", 1457010000, 3, 1, 7, -2.5], ["_GLOBAL", 1457010000, 9, 2, 20, 1.0]],
+        columns=EVENTS_15MIN_COLUMNS,
+    )
+    df, _ = _bq(FakeClient(1, rows), FakeUsage()).pull_events_15min(D, D, ["JA"])
+    assert list(df.columns) == EVENTS_15MIN_COLUMNS
+    assert list(df["entity"]) == ["JA", "_GLOBAL"]
+    assert df["batch_ts"].dtype == "int64" and df["n_events"].dtype == "int64"
+    assert df["n_articles"].dtype == float and df["tone_x_articles"].dtype == float
+    empty, _ = _bq(FakeClient(1, pd.DataFrame()), FakeUsage()).pull_orgs_15min(D, D, ["a"], ["A"])
+    assert list(empty.columns) == ORGS_15MIN_COLUMNS and empty.empty
+    assert empty["docs"].dtype == "int64"
+
+
+def test_events_15min_sql_dedups_whole_et_day_and_keeps_earliest_row() -> None:
+    code = _code("events_15min")
+    assert "SQLDATE" not in code  # timing by DATEADDED only
+    assert "DATE(added, 'America/New_York') AS et_day" in code
+    assert (
+        "GROUP BY et_day, SOURCEURL, EventCode, ActionGeo_FeatureID, ActionGeo_CountryCode" in code
+    )
+    assert "ORDER BY DATEADDED, GLOBALEVENTID LIMIT 1 )[OFFSET(0)]" in code
+    assert "event_day >= DATE_SUB(et_day, INTERVAL @lookback_days DAY)" in code
+    # the time filter comes after the dedup (kept is built from the deduplicated rows)
+    assert code.index("GROUP BY et_day") < code.index("MOD(batch_ts, 86400)")
+    # '_GLOBAL' takes every row (also rows with no country); a country only when requested
+    assert "UNNEST(IF(country IN UNNEST(@countries), [country, '_GLOBAL'], ['_GLOBAL']))" in code
+    assert "COUNTIF(quad IN (3, 4)) AS n_conflict" in code
+
+
+@pytest.mark.parametrize("name", ["events_15min", "gkg_orgs_15min"])
+def test_15min_sql_batch_rounding_and_filter(name: str) -> None:
+    code = _code(name)
+    assert "+ 899, 900) * 900" in code  # round UP to the 15-minute grid
+    assert "EXTRACT(DAYOFWEEK FROM TIMESTAMP_SECONDS(batch_ts)) BETWEEN 2 AND 6" in code
+    assert "MOD(batch_ts, 86400) BETWEEN 43200 AND 71100" in code
+    assert (43200, 71100) == (12 * 3600, 19 * 3600 + 45 * 60)  # 12:00 and 19:45 UTC
+    assert "session_date" not in code and "@cutoff_et" not in code
+
+
+def test_orgs_15min_sql_counts_a_document_once_per_ticker() -> None:
+    code = _code("gkg_orgs_15min")
+    assert "SELECT DISTINCT @alias_tickers[OFFSET(i)]" in code
+    assert "JOIN UNNEST(@aliases) AS a WITH OFFSET AS i ON LOWER(o) = a" in code
+    assert "SELECT '_GLOBAL' AS entity, batch_ts, COUNT(*) AS docs" in code
+    assert "SPLIT(V2Tone, ',')[SAFE_OFFSET(0)]" in code

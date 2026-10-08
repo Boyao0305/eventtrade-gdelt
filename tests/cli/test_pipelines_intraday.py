@@ -80,3 +80,149 @@ def test_max_tickers_limits_a_trial_run(tmp_path):
                               _fake_fetch(calls), ["A", "B", "C"], date(2016, 1, 4),
                               date(2016, 2, 1), lambda: NOW, lambda s: None, max_tickers=2)
     assert [c[0] for c in calls] == [("A",), ("B",)]
+
+
+# --- ADR 0007: 15-minute GDELT pulls --------------------------------------------------------
+
+class _GStore(_Store):
+    def __init__(self, assets, spent=0):
+        super().__init__(assets)
+        self.spent = spent
+
+    def month_to_date_bytes(self, now):
+        return self.spent
+
+
+class _Budget(Exception):
+    pass
+
+
+class _FakeGdelt:
+    def __init__(self, est=10**9, refuse_after=None):
+        self.est = est
+        self.refuse_after = refuse_after
+        self.estimates: list = []
+        self.pulls: list = []
+
+    def estimate(self, query_name, start, end, **params):
+        self.estimates.append((query_name, start, end, params))
+        return self.est
+
+    def _check(self):
+        if self.refuse_after is not None and len(self.pulls) > self.refuse_after:
+            raise _Budget("monthly budget")
+
+    @staticmethod
+    def _ts(d):
+        return int(datetime(d.year, d.month, d.day, 14, 0, tzinfo=UTC).timestamp())
+
+    def pull_events_15min(self, start, end, countries):
+        from eventtrade.adapters.intraday_store import EVENTS_15MIN_COLUMNS
+
+        self.pulls.append(("events", start, end, list(countries)))
+        self._check()
+        row = ["_GLOBAL", self._ts(start), 5, 1, 9.0, -3.0]
+        return pd.DataFrame([row], columns=EVENTS_15MIN_COLUMNS), 7
+
+    def pull_orgs_15min(self, start, end, aliases, alias_tickers):
+        from eventtrade.adapters.intraday_store import ORGS_15MIN_COLUMNS
+
+        self.pulls.append(("orgs", start, end, list(zip(aliases, alias_tickers, strict=True))))
+        self._check()
+        return pd.DataFrame([["AAPL", self._ts(start), 2, -1.5]], columns=ORGS_15MIN_COLUMNS), 11
+
+
+def _universe():
+    ja = _asset("EWJ", "A", "dm").model_copy(update={"fips_countries": ["JA"]})
+    uso = _asset("USO", "A", "commodity").model_copy(update={"fips_countries": ["SA", "US"]})
+    xlb = _asset("XLB", "A", None).model_copy(update={"fips_countries": ["ZZ"]})  # not a trial
+    aapl = _asset("AAPL", "B", "Information Technology").model_copy(
+        update={"org_aliases": ["Apple Inc", "apple"]})
+    goog = _asset("GOOG", "B", "Communication Services").model_copy(
+        update={"org_aliases": ["alphabet"]})
+    nope = _asset("NOPE", "B", None).model_copy(update={"org_aliases": ["nope"]})
+    return [ja, uso, xlb, aapl, goog, nope]
+
+
+def _run15(tmp_path, gdelt, dataset, start=None, end=None, execute=False, store=None, out=None):
+    out = [] if out is None else out
+    return pi.ingest_gdelt_15min(
+        _cfg(tmp_path), store or _GStore(_universe()), IntradayStore(tmp_path / "i.sqlite"),
+        gdelt, dataset, start, end, execute, lambda: NOW, _Budget, out.append)
+
+
+def test_period_chunks_years_and_months():
+    assert pi.period_chunks(date(2015, 12, 1), date(2017, 3, 31), 12) == [
+        (date(2015, 12, 1), date(2015, 12, 31)), (date(2016, 1, 1), date(2016, 12, 31)),
+        (date(2017, 1, 1), date(2017, 3, 31))]
+    assert pi.period_chunks(date(2016, 1, 15), date(2016, 3, 2), 1) == [
+        (date(2016, 1, 15), date(2016, 1, 31)), (date(2016, 2, 1), date(2016, 2, 29)),
+        (date(2016, 3, 1), date(2016, 3, 2))]
+    assert pi.period_chunks(date(2016, 11, 5), date(2017, 1, 1), 3) == [
+        (date(2016, 11, 5), date(2016, 12, 31)), (date(2017, 1, 1), date(2017, 1, 1))]
+
+
+def test_15min_params_from_track_a_and_b_trial_assets():
+    assets = _universe()
+    assert pi.gdelt_15min_params(assets, "events") == {"countries": ["JA", "SA", "US"]}
+    p = pi.gdelt_15min_params(assets, "orgs")
+    assert list(zip(p["aliases"], p["alias_tickers"], strict=True)) == [
+        ("alphabet", "GOOG"), ("apple", "AAPL"), ("apple inc", "AAPL")]
+    assert pi.gdelt_15min_params([], "events") is None
+    assert pi.gdelt_15min_params(assets[:3], "orgs") is None
+
+
+def test_15min_dry_run_default_range_estimates_every_year(tmp_path):
+    g, out = _FakeGdelt(est=2 * 10**9), []
+    assert _run15(tmp_path, g, "events", out=out) == pi.OK
+    spans = [(a, b) for _, a, b, _ in g.estimates]
+    assert spans[0] == (date(2015, 12, 1), date(2015, 12, 31))
+    assert spans[-1] == (date(2025, 1, 1), date(2025, 3, 31))  # never into the hold-out
+    assert len(spans) == 11 and g.pulls == []
+    assert {q for q, *_ in g.estimates} == {"events_15min"}
+    assert g.estimates[0][3] == {"countries": ["JA", "SA", "US"]}
+    assert any("estimate 22.00 GB" in line for line in out)
+    assert IntradayStore(tmp_path / "i.sqlite").pulled_chunks("events_15min") == set()
+
+
+def test_15min_execute_writes_chunks_then_resume_skips_them(tmp_path):
+    g = _FakeGdelt()
+    rc = _run15(tmp_path, g, "orgs", date(2016, 6, 1), date(2017, 2, 28), execute=True)
+    assert rc == pi.OK
+    assert [(a, b) for _, a, b, _ in g.pulls] == [(date(2016, 6, 1), date(2016, 12, 31)),
+                                                  (date(2017, 1, 1), date(2017, 2, 28))]
+    assert g.pulls[0][3] == [("alphabet", "GOOG"), ("apple", "AAPL"), ("apple inc", "AAPL")]
+    istore = IntradayStore(tmp_path / "i.sqlite")
+    assert istore.pulled_chunks("gkg_orgs_15min") == {(date(2016, 6, 1), date(2016, 12, 31)),
+                                                      (date(2017, 1, 1), date(2017, 2, 28))}
+    assert len(istore.read_gdelt("orgs_15min", None, None)) == 2
+    g2 = _FakeGdelt()
+    assert _run15(tmp_path, g2, "orgs", date(2016, 6, 1), date(2017, 2, 28),
+                  execute=True) == pi.OK
+    assert g2.pulls == []
+    assert _run15(tmp_path, g2, "orgs", date(2016, 6, 1), date(2017, 2, 28)) == pi.OK
+    assert g2.estimates == []  # the dry run skips pulled chunks too
+
+
+def test_15min_budget_refusal_stops_cleanly_and_resumes(tmp_path):
+    g, out = _FakeGdelt(refuse_after=1), []
+    rc = _run15(tmp_path, g, "events", date(2016, 1, 1), date(2018, 12, 31), execute=True,
+                out=out)
+    assert rc == pi.BUDGET
+    istore = IntradayStore(tmp_path / "i.sqlite")
+    assert istore.pulled_chunks("events_15min") == {(date(2016, 1, 1), date(2016, 12, 31))}
+    assert any("refused by budget guard at 2017-01-01..2017-12-31" in line for line in out)
+    g2 = _FakeGdelt()
+    assert _run15(tmp_path, g2, "events", date(2016, 1, 1), date(2018, 12, 31),
+                  execute=True) == pi.OK
+    assert [a.year for _, a, _, _ in g2.pulls] == [2017, 2018]
+    rows = istore.read_gdelt("events_15min", None, None)
+    assert len(rows) == 3 and set(rows["entity"]) == {"_GLOBAL"}
+
+
+def test_15min_refuses_holdout_and_missing_universe(tmp_path):
+    g = _FakeGdelt()
+    assert _run15(tmp_path, g, "events", end=date(2025, 4, 1)) == pi.REFUSED
+    assert _run15(tmp_path, g, "orgs", date(2016, 1, 1), date(2015, 1, 1)) == pi.REFUSED
+    assert _run15(tmp_path, g, "orgs", store=_GStore([])) == pi.MISSING
+    assert g.estimates == [] and g.pulls == []

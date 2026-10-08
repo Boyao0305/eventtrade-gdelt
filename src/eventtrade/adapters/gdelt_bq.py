@@ -16,6 +16,11 @@ partitioned by ``SQLDATE`` (the event's own date), not by ``DATEADDED``: rows ad
 in that day's partition and in earlier ones. Event pulls therefore scan ``lookback_days`` extra
 partitions, and the SQL drops any event dated more than ``lookback_days`` before its session, per
 row, so results do not depend on the width of the pull window.
+
+15-minute queries (ADR 0007): ``events_15min`` and ``gkg_orgs_15min`` take America/New_York
+calendar days, not cutoff-rolled sessions, and stamp rows by 15-minute batch (epoch seconds UTC).
+They use the same guard but no session roll: GKG partitions are the UTC days start..end (every
+kept batch, 12:00-19:45 UTC, lies on its ET day), events partitions reach back ``lookback_days``.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from eventtrade.adapters.intraday_store import EVENTS_15MIN_COLUMNS, ORGS_15MIN_COLUMNS
 from eventtrade.schemas import GDELT_DAILY_COLUMNS, BqUsage
 
 QUERIES_DIR = Path(__file__).parent / "queries"
@@ -36,6 +42,9 @@ _NY = ZoneInfo("America/New_York")
 DEFAULT_LOOKBACK_DAYS = 30  # events dated > 30 days before being added: ~0.5% of rows (exp. 0001)
 _MIN_BILLED_BYTES = 10 * 1024**2  # BigQuery bills at least 10 MiB per query that reads a table
 _RESULT_TIMEOUT_S = 600.0
+EVENTS_15MIN = "events_15min"
+ORGS_15MIN = "gkg_orgs_15min"
+_15MIN_QUERIES = (EVENTS_15MIN, ORGS_15MIN)
 
 
 class UsageLog(Protocol):
@@ -93,14 +102,11 @@ class GdeltBigQuery:
 
     def estimate(self, query_name: str, start: date, end: date, **params: Any) -> int:
         """Bytes the named query would process over sessions start..end (dry run only, recorded)."""
-        return self._dry_run(query_name, self._bind(start, end, params))
+        return self._dry_run(query_name, self._bind(start, end, params, query_name))
 
     def query(self, query_name: str, start: date, end: date, **params: Any) -> pd.DataFrame:
         """Run the named query under the budget guard and return BigQuery's rows unchanged."""
-        bound = self._bind(start, end, params)
-        est = self._dry_run(query_name, bound)
-        cap = self._check_budget(query_name, est)
-        return self._run(query_name, bound, cap)
+        return self._query_billed(query_name, start, end, params)[0]
 
     def pull_events_daily(self, start: date, end: date, cutoff_et: str) -> pd.DataFrame:
         """Event aggregates per ActionGeo FIPS country and '_GLOBAL' for sessions start..end."""
@@ -123,7 +129,41 @@ class GdeltBigQuery:
         df = self.query("gkg_orgs_daily", start, end, cutoff_et=cutoff_et, aliases=clean)
         return _to_daily(df, "gkg")
 
+    def pull_events_15min(
+        self, start: date, end: date, countries: list[str]
+    ) -> tuple[pd.DataFrame, int]:
+        """ADR 0007 event counts per (FIPS country or '_GLOBAL', 15-minute batch) for ET days
+        start..end, and the bytes billed. Columns: intraday_store.EVENTS_15MIN_COLUMNS."""
+        clean = sorted({c.strip() for c in _nonempty(countries, "countries")})
+        df, billed = self._query_billed(EVENTS_15MIN, start, end, {"countries": clean})
+        return _to_15min(df, EVENTS_15MIN_COLUMNS), billed
+
+    def pull_orgs_15min(
+        self, start: date, end: date, aliases: list[str], alias_tickers: list[str]
+    ) -> tuple[pd.DataFrame, int]:
+        """ADR 0007 GKG docs per (ticker or '_GLOBAL', 15-minute batch) for ET days start..end,
+        and the bytes billed. aliases[i] belongs to alias_tickers[i]; aliases are lower-cased.
+        Columns: intraday_store.ORGS_15MIN_COLUMNS."""
+        if len(aliases) != len(alias_tickers):
+            raise ValueError(f"{len(aliases)} aliases but {len(alias_tickers)} alias_tickers")
+        pairs = sorted({(a.strip().lower(), t.strip()) for a, t in zip(aliases, alias_tickers,
+                                                                      strict=True)
+                        if a.strip() and t.strip()})
+        if not pairs:
+            raise ValueError("aliases must be a non-empty list of strings")
+        params = {"aliases": [a for a, _ in pairs], "alias_tickers": [t for _, t in pairs]}
+        df, billed = self._query_billed(ORGS_15MIN, start, end, params)
+        return _to_15min(df, ORGS_15MIN_COLUMNS), billed
+
     # --- internals ----------------------------------------------------------------------------
+
+    def _query_billed(
+        self, query_name: str, start: date, end: date, params: dict[str, Any]
+    ) -> tuple[pd.DataFrame, int]:
+        bound = self._bind(start, end, params, query_name)
+        est = self._dry_run(query_name, bound)
+        cap = self._check_budget(query_name, est)
+        return self._run(query_name, bound, cap)
 
     def _sql(self, query_name: str) -> str:
         path = self._queries_dir / f"{query_name}.sql"
@@ -131,12 +171,27 @@ class GdeltBigQuery:
             raise ValueError(f"unknown query {query_name!r} (no {path})")
         return path.read_text(encoding="utf-8")
 
-    def _bind(self, start: date, end: date, params: dict[str, Any]) -> dict[str, Any]:
-        """Named parameters for one query; partition windows only when a cutoff is given."""
+    def _bind(
+        self, start: date, end: date, params: dict[str, Any], query_name: str = ""
+    ) -> dict[str, Any]:
+        """Named parameters for one query; partition windows when a cutoff is given (daily
+        queries) or for the 15-minute queries (ET days, no session roll)."""
         if end < start:
             raise ValueError(f"end {end} is before start {start}")
         bound: dict[str, Any] = {"start": start, "end": end}
-        if "cutoff_et" in params:
+        if query_name in _15MIN_QUERIES:
+            if query_name == ORGS_15MIN and (
+                len(params.get("aliases", [])) != len(params.get("alias_tickers", []))
+            ):
+                raise ValueError("aliases and alias_tickers must have the same length")
+            bound |= {
+                "gkg_part_start": start,
+                "gkg_part_end": end,
+                "ev_part_start": start - timedelta(days=self._lookback),
+                "ev_part_end": end,
+                "lookback_days": self._lookback,
+            }
+        elif "cutoff_et" in params:
             first, last = partition_window(start, end, params["cutoff_et"])
             bound |= {
                 "gkg_part_start": first,
@@ -182,12 +237,15 @@ class GdeltBigQuery:
             )
         return max(min(self._max_bytes, self._budget - spent), _MIN_BILLED_BYTES)
 
-    def _run(self, query_name: str, bound: dict[str, Any], cap: int) -> pd.DataFrame:
+    def _run(
+        self, query_name: str, bound: dict[str, Any], cap: int
+    ) -> tuple[pd.DataFrame, int]:
+        """Rows and bytes billed of the real (non-dry) job; usage is recorded even on failure."""
         cfg = self._job_config(bound, maximum_bytes_billed=cap)
         job = self._client.query(self._sql(query_name), job_config=cfg)
         try:
             job.result(timeout=_RESULT_TIMEOUT_S)
-            return job.to_dataframe()
+            return job.to_dataframe(), int(job.total_bytes_billed or 0)
         finally:
             self._usage.record(
                 BqUsage(
@@ -275,3 +333,19 @@ def _to_daily(df: pd.DataFrame, source: str) -> pd.DataFrame:
     out["n"] = out["n"].astype("int64")
     out = out.sort_values(["session_date", "entity", "metric"], kind="stable")
     return out[GDELT_DAILY_COLUMNS].reset_index(drop=True)
+
+
+def _to_15min(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """BigQuery rows -> the intraday store's 15-minute columns: str entity, int64 batch_ts and
+    counts, float sums; sorted by (entity, batch_ts)."""
+    ints = {"batch_ts", "n_events", "n_conflict", "docs"}
+    out = pd.DataFrame({
+        c: (df[c].astype(str) if c == "entity"
+            else pd.to_numeric(df[c]).astype("int64" if c in ints else float))
+        for c in columns
+    }) if not df.empty else pd.DataFrame({
+        c: pd.Series(dtype=object if c == "entity" else "int64" if c in ints else float)
+        for c in columns
+    })
+    out = out.sort_values(["entity", "batch_ts"], kind="stable")
+    return out[columns].reset_index(drop=True)
