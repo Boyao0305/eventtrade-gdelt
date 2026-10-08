@@ -32,6 +32,12 @@ GdeltSource = Literal["events", "gkg"]
 # Compute returns from adj_open/adj_close only.
 PRICE_COLUMNS = ["date", "ticker", "open", "high", "low", "close", "volume", "adj_open", "adj_close"]
 
+# Intraday bars (ADR 0007): Alpaca 15-minute SIP bars, regular session only. `ts` = bar START as
+# integer seconds since the Unix epoch (UTC); the bar covers [ts, ts + 900). Prices are adjusted
+# for splits and dividends (`adjustment=all`); compute returns within a session only.
+INTRADAY_COLUMNS = ["ts", "ticker", "open", "high", "low", "close", "volume", "vwap", "trade_count"]
+INTRADAY_BAR_SECONDS = 900
+
 # Features on trading days. `date` = the trading day t whose cutoff the feature is known by.
 FEATURE_COLUMNS = ["date", "ticker", "feature", "value"]
 

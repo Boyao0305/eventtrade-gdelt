@@ -41,5 +41,14 @@ class Config(BaseModel):
         return self.home / "data" / "eventtrade.sqlite"
 
     @property
+    def intraday_db_path(self) -> Path:
+        """ADR 0007: separate store for intraday bars and 15-minute GDELT."""
+        return self.home / "data" / "intraday.sqlite"
+
+    @property
+    def alpaca_env_path(self) -> Path:
+        return self.home / "secrets" / "alpaca.env"
+
+    @property
     def reports_dir(self) -> Path:
         return self.home / "reports"

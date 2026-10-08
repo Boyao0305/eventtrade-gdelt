@@ -60,7 +60,7 @@ forbidden_modules = ["eventtrade.cli"]
 [[tool.importlinter.contracts]]
 name = "Only cli.main names concrete adapters"
 type = "forbidden"
-source_modules = ["eventtrade.cli.pipelines"]
+source_modules = ["eventtrade.cli.pipelines", "eventtrade.cli.pipelines_intraday"]
 forbidden_modules = ["eventtrade.adapters"]
 
 [[tool.importlinter.contracts]]

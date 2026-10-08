@@ -63,6 +63,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return pipelines.ingest_gdelt(cfg, store, _gdelt(cfg, store), args.dataset, args.start,
                                       args.end, args.execute, False, now,
                                       BudgetExceeded)
+    if cmd == "ingest-intraday":
+        from eventtrade.cli import pipelines_intraday as pi
+
+        return pi.ingest_intraday_prices(cfg, store, _istore(cfg), _fetch_alpaca(cfg),
+                                         args.tickers, args.start, args.end, now,
+                                         max_tickers=args.max_tickers)
+    if cmd == "intraday-status":
+        from eventtrade.cli import pipelines_intraday as pi
+
+        return pi.intraday_status(_istore(cfg))
     if cmd == "build-dataset":
         return pipelines.build_dataset(cfg, store, args.track)
     if cmd == "signal-study":
@@ -122,6 +132,17 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--budget-gb", type=_budget_gb, default=None, dest="budget_gb",
                    help="month-to-date BigQuery budget for this run, in GB (default: config 900;"
                         f" at most {BQ_BUDGET_CEILING_GB}, the $20 cap over the free tier)")
+
+    s = sub.add_parser("ingest-intraday", help="ADR 0007: Alpaca 15-minute SIP bars per (ticker,"
+                                               " year) into data/intraday.sqlite; resumable")
+    s.add_argument("--start", type=_date, default=None, help="default 2016-01-04")
+    s.add_argument("--end", type=_date, default=None,
+                   help="inclusive; default 2025-03-31; must be before the hold-out")
+    s.add_argument("--tickers", nargs="+", default=None,
+                   help="default: hedges, then Track A, then Track B")
+    s.add_argument("--max-tickers", type=int, default=None, dest="max_tickers",
+                   help="stop after this many tickers (for a trial run)")
+    sub.add_parser("intraday-status", help="row counts of data/intraday.sqlite")
 
     s = sub.add_parser("build-dataset", help="features + labels for one track, dev period")
     s.add_argument("--track", choices=("A", "B"), required=True)
@@ -203,6 +224,19 @@ def _gdelt(cfg: Config, store: Any) -> Any:
                                                        project=cfg.gcp_project)
     return GdeltBigQuery(client, store, cfg.bq_max_bytes_per_query, cfg.bq_monthly_budget_bytes,
                          _now)
+
+
+def _istore(cfg: Config) -> Any:
+    from eventtrade.adapters.intraday_store import IntradayStore
+
+    return IntradayStore(cfg.intraday_db_path)
+
+
+def _fetch_alpaca(cfg: Config) -> Any:
+    from eventtrade.adapters import intraday
+
+    key = intraday.load_credentials(cfg.alpaca_env_path)
+    return lambda tickers, start, end: intraday.fetch_alpaca_bars(tickers, start, end, key)
 
 
 def _fetch_yf(tickers: list[str], start: date, end: date) -> Any:
