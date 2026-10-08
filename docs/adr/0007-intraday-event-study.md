@@ -177,6 +177,46 @@ Confirmed cells go to gates 2–3 as one combined intraday event portfolio, and 
 every logged trial. The hold-out is then used once; it needs a hold-out intraday pull, made only
 then.
 
+## Implementation notes (2026-10-07, before any intraday statistic was computed)
+
+These were settled from the code, synthetic tests and API behaviour. No intraday outcome or event
+count from real data had been computed when they were written.
+
+**Data and calendar**
+- **Alpaca has no bars before 2016-01-01.** The 20 baseline days before 2016-01-04 come from the
+  daily SPY calendar (`prices`). They are GDELT baseline days only: no decisions, no placebo days.
+- **Bar pages** hold ~900 bars, so the pull costs ~15 requests per ticker-year (~9 h for ~960
+  tickers).
+- **`events_15min`** adds one per-row rule: SQLDATE must not be after the UTC day of `DATEADDED`.
+  This makes the rows independent of chunking; future-dated rows are coding errors.
+- **`gkg_orgs_15min`** pulls by calendar year (≤ 39.3 GB per chunk, under the 50 GB cap).
+  - NULL sums are stored as 0.
+  - A document whose tone cannot be parsed still counts in `docs`.
+  - An alias shared by two tickers counts the document for each.
+- **Dry-run estimates:** events 127.96 GB, orgs 221.82 GB.
+
+**Prices, hedges and costs**
+- **Pre-move before 11:00** (τ − 75 before the open): the price is the session's first open.
+- **XLC hedge before its first bar** is SPY, assembled day by day as one hedge series.
+- **Liquidity:** median trade count over all regular-session bar slots of the discovery decision
+  days, with missing bars counted as 0.
+- **Abdi–Ranaldo spread:** two-bar estimates within a day (negative products set to 0), averaged
+  per day, then the median over discovery decision days.
+- **Round-trip cost of a cell:** the mean over its events of 2·c_asset (+ 2·c_hedge).
+- **Prices are stored as float32** in memory; returns are computed in float64.
+
+**Events and inference**
+- **Eligibility** (entry bar for the asset and its hedge) is checked **before** declustering. The
+  first *eligible* firing of the day is the event.
+- **Track B:** spikes are declustered first, then split by tone.
+- **Tone baseline values** count when the window has articles > 0.
+- **Placebo draws:**
+  - A placebo day may coincide with the original day.
+  - A draw in which fewer than two event days are eligible has no t and is not counted.
+  - p = (1 + exceed) / (1 + valid draws).
+- **β** (momentum control) is fitted on cells sampled with replacement from the liquid assets of
+  the track. Cells that are events of any signal are removed after sampling.
+
 ## Consequences
 
 - +18 discovery trials (plus confirmations).

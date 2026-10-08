@@ -78,18 +78,12 @@ def intraday_study(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo 
                  f" t {n.get('t')} p {n.get('p')} {n.get('verdict', '')}")
         return OK
     hold_ts = _epoch(cfg.holdout_start)
-    spy = istore.read_bars([iu.HEDGE_MARKET], None, hold_ts)
-    if spy.empty:
-        echo("no SPY intraday bars: run `ingest-intraday`")
+    cal = study_calendar(cfg, store, istore, discovery[0])
+    if isinstance(cal, str):
+        echo(cal)
         return MISSING
-    days, early = st.trading_calendar(spy["ts"])
-    keep = days < cfg.holdout_start
-    days, early = days[keep], early[keep]
+    days, early = cal
     nd = len(days)
-    if int((days < discovery[0]).sum()) < st.BASELINE_DAYS:
-        echo(f"need >= {st.BASELINE_DAYS} trading days of SPY bars before {discovery[0]} for the"
-             " baselines: run `ingest-intraday --tickers SPY --start 2015-12-01 --end 2015-12-31`")
-        return MISSING
     years = np.array([d.year for d in days])
     utc_slot = st.tau_utc_slots(days)
 
@@ -226,6 +220,32 @@ def intraday_study(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo 
         echo(f"  confirmation {c.key}: mean {res.mean:.5f} t {res.t:.2f} p {res.p:.4f}"
              f" net {note['net']} resid {note['resid_mean']} -> {note['verdict']}")
     return OK
+
+
+def study_calendar(cfg: Config, store: Any, istore: Any, first_decision: date
+                   ) -> tuple[np.ndarray, np.ndarray] | str:
+    """(trading days, no-decision flag) or a MISSING message.
+
+    Days with SPY intraday bars, before the hold-out; the flag marks early closes. Alpaca bars
+    start 2016-01-01, so the 20+ baseline days before the first decision day come from the daily
+    SPY calendar (`prices`); they are GDELT baseline days only, flagged as no-decision.
+    """
+    spy = istore.read_bars([iu.HEDGE_MARKET], None, _epoch(cfg.holdout_start))
+    if spy.empty:
+        return "no SPY intraday bars: run `ingest-intraday`"
+    days, early = st.trading_calendar(spy["ts"])
+    keep = days < cfg.holdout_start
+    days, early = days[keep], early[keep]
+    if int((days < first_decision).sum()) < st.BASELINE_DAYS:
+        daily = store.read_prices([iu.HEDGE_MARKET], date(first_decision.year - 1, 11, 1), days[0])
+        extra = np.array(sorted({pd.Timestamp(x).date() for x in daily["date"]}), dtype=object)
+        if len(extra):
+            days = np.concatenate([extra, days])
+            early = np.concatenate([np.ones(len(extra), dtype=bool), early])
+    if int((days < first_decision).sum()) < st.BASELINE_DAYS:
+        return (f"need >= {st.BASELINE_DAYS} trading days before {first_decision} for the"
+                " baselines (SPY intraday bars or daily prices): run `ingest-prices --tickers SPY`")
+    return days, early
 
 
 # --- events ------------------------------------------------------------------------------------

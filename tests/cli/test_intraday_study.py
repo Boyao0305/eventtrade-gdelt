@@ -161,3 +161,22 @@ def test_eighteen_cells_with_registered_signs():
     assert len(cs) == 18 and len({c.key for c in cs}) == 18
     signs = {(c.hyp, c.sign) for c in cs}
     assert signs == {("I1", -1), ("I2", -1), ("I3", 0), ("I4", 1), ("I5", -1), ("I6", 1)}
+
+
+def test_calendar_prepends_daily_spy_days_as_no_decision(tmp_path):
+    cfg = Config(home=tmp_path, gcp_key_path=tmp_path / "k.json")
+    store = SqliteStore(cfg.db_path)
+    store.init()
+    istore = IntradayStore(cfg.intraday_db_path)
+    istore.init()
+    jan = [d for d in _weekdays() if date(2016, 1, 4) <= d <= date(2016, 1, 29)]
+    b = _bars("SPY", jan, {}, np.random.default_rng(0))
+    istore.write_bars_year("SPY", 2016, b, NOW)
+    assert "need >= 20" in ps.study_calendar(cfg, store, istore, date(2016, 1, 4))
+    dec = [d for d in _weekdays() if date(2015, 11, 2) <= d <= date(2015, 12, 31)]
+    store.upsert_prices(pd.DataFrame({"date": pd.to_datetime(dec), "ticker": "SPY", "open": 1.0,
+                                      "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0,
+                                      "adj_open": 1.0, "adj_close": 1.0}), "yfinance")
+    days, nodec = ps.study_calendar(cfg, store, istore, date(2016, 1, 4))
+    assert list(days[:len(dec)]) == dec and nodec[:len(dec)].all()
+    assert list(days[len(dec):]) == jan and not nodec[len(dec):].any()

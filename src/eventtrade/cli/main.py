@@ -78,6 +78,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return pi.ingest_intraday_prices(cfg, store, _istore(cfg), _fetch_alpaca(cfg),
                                          args.tickers, args.start, args.end, now,
                                          max_tickers=args.max_tickers)
+    if cmd == "intraday-study":
+        from eventtrade.cli import pipelines_intraday_study as pis
+
+        return pis.intraday_study(cfg, store, _istore(cfg), now)  # n_boot fixed at 2,000
     if cmd == "intraday-status":
         from eventtrade.cli import pipelines_intraday as pi
 
@@ -164,6 +168,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--max-tickers", type=int, default=None, dest="max_tickers",
                    help="stop after this many tickers (for a trial run)")
     sub.add_parser("intraday-status", help="row counts of data/intraday.sqlite")
+    sub.add_parser("intraday-study", help="ADR 0007: intraday event study, 18 cells, discovery +"
+                                          " confirmation, once only (logs I1..I6 trials)")
 
     s = sub.add_parser("build-dataset", help="features + labels for one track, dev period")
     s.add_argument("--track", choices=("A", "B"), required=True)

@@ -54,6 +54,34 @@ sources).
 - Fixed on dev after the run: the dry run warned "estimate exceeds what is left" for a 0 GB
   estimate when the month was over budget.
 
+**2026-10-07 — intraday study (ADR 0007) in flight. The user chose option (a), hourly with
+Alpaca.**
+- **Credentials and pricing.** The key is in `secrets/alpaca.env`. The user pasted it in chat,
+  so advise regenerating it after the pull. It is a free paper account: historical SIP bars from
+  2016-01-01 only, pages of ~900 bars, ≤ 200 requests/min.
+- **ADR 0007** was reviewed by two agents (stats/look-ahead, data feasibility) and rewritten
+  before any data was pulled. Implementation notes were added before any statistic.
+- **Code** (commits `7c6c708`, `92a337b`, + this one):
+  - `adapters/intraday.py`, `adapters/intraday_store.py` (separate `data/intraday.sqlite`);
+  - queries `events_15min.sql` and `gkg_orgs_15min.sql`;
+  - `core/intraday.py` (universe, hedges), `core/intraday_study.py` (statistics);
+  - `cli/pipelines_intraday.py` (ingests), `cli/pipelines_intraday_study.py` (the study);
+  - commands `ingest-intraday`, `ingest-gdelt-15min`, `intraday-status`, `intraday-study`.
+- **Running in the background** (job tmp logs):
+  - `ingest-intraday`, all ~960 tickers, ~9–14 h, resumable (`ingest_intraday.log`);
+  - `ingest-gdelt-15min events|orgs --execute --budget-gb 2000`, 350 GB, cumulative ≈ $4.6 of
+    the $20 cap (`pull15_*.log`).
+- **If interrupted,** rerun the same commands: ledgers skip done ticker-years and chunks.
+- **Next:**
+  1. Verify the ledgers are complete (`intraday-status`; dry runs show 0 chunks pending).
+  2. Run the full test suite in chunks.
+  3. Freeze a checkout.
+  4. Run `intraday-study` **once** (it refuses a second run).
+  5. Write experiment 0009.
+- **Possible speed-up, not taken:** fetch only Track B stocks whose GDELT spike ever fires. It
+  would change the β sample and the liquidity filter set; decide and document before any
+  outcome.
+
 **Open question from the user, answered on 2026-10-06 (see the final report): intraday horizons (hours/minutes).** Not tested.
 Points for the answer: GDELT updates every 15 minutes and `DATEADDED` has 15-minute resolution,
 so hour-scale is the finest meaningful horizon (minutes are below GDELT's own latency and belong
