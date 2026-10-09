@@ -108,3 +108,25 @@ def test_planted_pre_window_drop_is_foresight_value_and_once_only(world, monkeyp
 
 def test_24_pairs_7_leads():
     assert len(pf.pairs()) == 24 and len(pf.leads()) == 7
+
+
+
+def test_variant_0010_country_only_first_firing_freshness(world, monkeypatch):
+    monkeypatch.setattr(pf, "BH_Q", 1.0)
+    monkeypatch.setattr(pf, "HOLM_ALPHA", 1.0)
+    cfg, store, istore = world
+    out: list[str] = []
+    assert pf.foresight(cfg, store, istore, lambda: NOW, out.append, n_boot=99,
+                        discovery=w.DISC, confirmation=w.CONF, variant="0010") == pf.OK
+    o2 = [t for t in store.read_trials() if t.hypothesis == "O2"]
+    assert o2 and all(t.params["lookahead"] and t.params["adr"] == "0010" for t in o2)
+    cells = {t.params["cell"] for t in o2 if t.params["period"] == "discovery"}
+    assert len(cells) == 22 * 7 and not any("stocks" in c for c in cells)
+    n30 = next(json.loads(t.notes) for t in o2
+               if t.params["cell"] == "quad4|dm|30m" and t.params["period"] == "discovery")
+    assert n30["mean_signed"] > 0.01 and n30["n_events"] >= 60, n30
+    out2: list[str] = []
+    assert pf.foresight(cfg, store, istore, lambda: NOW, out2.append, variant="0010") == pf.OK
+    assert "already logged" in out2[0]
+    with pytest.raises(ValueError):
+        pf.foresight(cfg, store, istore, lambda: NOW, out2.append, variant="x")

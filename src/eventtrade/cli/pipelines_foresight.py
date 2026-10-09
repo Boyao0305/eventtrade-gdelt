@@ -69,13 +69,21 @@ def leads() -> list[str]:
 
 def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = print,
               n_boot: int = N_BOOT, discovery: tuple[date, date] = DISCOVERY,
-              confirmation: tuple[date, date] = CONFIRMATION) -> int:
+              confirmation: tuple[date, date] = CONFIRMATION, variant: str = "0009") -> int:
+    """variant "0009": ADR 0009 (fresh = z < 1 over 24 h; country + company cells; reverse study;
+    hypotheses O/R). variant "0010": ADR 0010 (fresh = no firing over 24 h; country and producer
+    cells only; no reverse study; hypothesis O2)."""
+    if variant not in ("0009", "0010"):
+        raise ValueError(f"unknown variant {variant!r}")
     if confirmation[1] >= cfg.holdout_start or discovery[0] < cfg.start:
         echo("refused: study periods must lie inside the dev period (ADR 0001)")
         return REFUSED
-    prior = [t for t in store.read_trials() if t.hypothesis in ("O", "R")]
+    hyps = ("O", "R") if variant == "0009" else ("O2",)
+    o_label = "O" if variant == "0009" else "O2"
+    use_pairs = pairs() if variant == "0009" else [p for p in pairs() if p[1] != "stocks"]
+    prior = [t for t in store.read_trials() if t.hypothesis in hyps]
     if prior:
-        echo(f"ADR 0009 already logged ({len(prior)} trials); nothing recomputed")
+        echo(f"ADR {variant} already logged ({len(prior)} trials); nothing recomputed")
         for t in prior:
             n = json.loads(t.notes)
             if t.params.get("period") == "confirmation" or n.get("discovered"):
@@ -111,7 +119,7 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
     hedge_mats["XLC_OR_SPY"] = _xlc_or_spy(hedge_mats["XLC"], hedge_mats[iu.HEDGE_MARKET])
     rows = [(a.ticker, "A", {"dm": iu.HEDGE_DM, "em": iu.HEDGE_EM}.get(a.screen_group or "", ""))
             for a in iu.track_a_assets(assets)]
-    for a in iu.track_b_assets(assets):
+    for a in iu.track_b_assets(assets) if variant == "0009" else []:
         hk = iu.SECTOR_SPDR[a.screen_group or ""]
         rows.append((a.ticker, "B", "XLC_OR_SPY" if hk == "XLC" else hk))
     dmask = disc_mask & decision
@@ -151,13 +159,13 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
         return istore.read_gdelt("events_15min_cat", None, hold_ts, entity=entity, geo=geo)
 
     org = istore.read_gdelt("orgs_15min", None, hold_ts)
-    if read("_GLOBAL", "action").empty or org.empty:
+    if read("_GLOBAL", "action").empty or (variant == "0009" and org.empty):
         echo("need `ingest-gdelt-15min events_cat` and `orgs`")
         return MISSING
     sig_data = _signal_grids(read, org, liquid, by_ticker, group_of, days)
     events: dict[tuple[str, str], pd.DataFrame] = {}
     n_fresh: dict[tuple[str, str], tuple[int, int]] = {}
-    for (sig, grp, _s) in pairs():
+    for (sig, grp, _s) in use_pairs:
         parts, tot, kept = [], 0, 0
         for t, (z, fire) in sig_data.get(sig, {}).items():
             if group_of[t] != grp:
@@ -169,7 +177,10 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
             if not len(d):
                 continue
             j = first[d]
-            ok = fs.fresh(z, d, utc_slot[d, j])
+            if variant == "0009":
+                ok = fs.fresh(z, d, utc_slot[d, j])  # z < 1 in the prior 24 h
+            else:  # ADR 0010: no firing in the prior 24 h (fired windows count as elevated)
+                ok = fs.fresh(np.where(fire, 1.0, 0.0), d, utc_slot[d, j])
             tot, kept = tot + len(d), kept + int(ok.sum())
             parts.append(pd.DataFrame({"day": d[ok], "asset": i, "j": j[ok]}))
         events[(sig, grp)] = (pd.concat(parts, ignore_index=True) if parts else
@@ -184,7 +195,7 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
     for period, mask, span in (("discovery", disc_mask, discovery),
                                ("confirmation", conf_mask, confirmation)):
         pool = np.flatnonzero(mask & decision)
-        for (sig, grp, s) in pairs():
+        for (sig, grp, s) in use_pairs:
             ev = events[(sig, grp)]
             ev = ev[mask[ev["day"].to_numpy(int)]] if len(ev) else ev
             for lead in leads():
@@ -209,7 +220,7 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
                         "upper95": _num(upper),
                         "no_value": bool(math.isfinite(upper) and upper < rt_mean),
                         "exogenous_prior": sig in EXOGENOUS_PRIOR, **seg,
-                        "fresh_events_total": n_fresh[(sig, grp)], "adr": "0009"}
+                        "fresh_events_total": n_fresh[(sig, grp)], "adr": variant}
                 res.setdefault(period, {})[key] = (r, note)
         if period == "discovery":
             pv = {k: v[0].p for k, v in res["discovery"].items()}
@@ -229,11 +240,22 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
                 note["verdict"] = "CONFIRMED" if key in holm_pass else "not confirmed"
                 echo(f"  confirmation {key}: signed mean {note['mean_signed']} t {note['t']}"
                      f" p {note['p']} -> {note['verdict']}")
-            pending.append(("O", key, period, span, note))
+            pending.append((o_label, key, period, span, note))
 
-    # --- reverse event study --------------------------------------------------------------------
+    # --- reverse event study (ADR 0009 only) ----------------------------------------------------
+    if variant == "0009":
+        _reverse_and_pend(sig_data, liquid, index, group_of, panel, days, utc_slot, decision,
+                          disc_mask, conf_mask, years, n_boot, cfg.seed, discovery, confirmation,
+                          pending, echo)
+    _log_pending(store, pending, n_boot, cfg.seed, now, variant, echo, t0)
+    return OK
+
+
+def _reverse_and_pend(sig_data, liquid, index, group_of, panel, days, utc_slot, decision,
+                      disc_mask, conf_mask, years, n_boot, seed, discovery, confirmation,
+                      pending, echo):
     rev = _reverse(sig_data, liquid, index, group_of, panel, days, utc_slot, decision,
-                   disc_mask, conf_mask, years, n_boot, cfg.seed)
+                   disc_mask, conf_mask, years, n_boot, seed)
     disc_rev = benjamini_hochberg({k: (math.nan if v["p"] is None else v["p"])
                                    for k, v in rev["discovery"].items()}, BH_Q)
     for period, span in (("discovery", discovery), ("confirmation", confirmation)):
@@ -247,16 +269,17 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
              f" t {_f(note['t'])} p {_f(note['p'], 4)}"
              f" {'FOLLOWS PRICE' if key in disc_rev else 'exogenous (not significant)'}")
 
+
+def _log_pending(store, pending, n_boot, seed, now, variant, echo, t0):
     logged = {tr.trial_id for tr in store.read_trials()}
     n0 = len(logged)
     for hyp, key, period, span, note in pending:
         sig = key.split("|")[0]
         track = "B" if sig.startswith("spike") else "A"
-        params = {"adr": "0009", "cell": key, "period": period, "n_boot": n_boot,
-                  "seed": cfg.seed, "lookahead": True}
+        params = {"adr": variant, "cell": key, "period": period, "n_boot": n_boot,
+                  "seed": seed, "lookahead": True}
         _log_trial(store, logged, track, "signal", hyp, params, *span, now, note)
     echo(f"{len(logged) - n0} trial(s) logged (all lookahead) [{_time.time() - t0:.0f}s]")
-    return OK
 
 
 def _signal_grids(read, org, liquid, by_ticker, group_of, days):

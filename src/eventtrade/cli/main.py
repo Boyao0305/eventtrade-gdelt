@@ -87,6 +87,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from eventtrade.cli import pipelines_foresight as pfo
 
         return pfo.foresight(cfg, store, _istore(cfg), now)  # n_boot fixed at 2,000
+    if cmd == "foresight-country":
+        from eventtrade.cli import pipelines_foresight as pfo
+
+        return pfo.foresight(cfg, store, _istore(cfg), now, variant="0010")
     if cmd == "intraday-search":
         from eventtrade.cli import pipelines_intraday_search as pse
 
@@ -180,6 +184,8 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("intraday-status", help="row counts of data/intraday.sqlite")
     sub.add_parser("foresight", help="ADR 0009: value-of-foresight profile and reverse event"
                                      " study, look-ahead diagnostic, once only (O/R trials)")
+    sub.add_parser("foresight-country", help="ADR 0010: foresight for country categories with"
+                                             " first-firing freshness, once only (O2 trials)")
     sub.add_parser("intraday-search", help="ADR 0008: intraday parameter search, 34 cells x 160"
                                            " configs, once only (logs J trials)")
     sub.add_parser("intraday-study", help="ADR 0007: intraday event study, 18 cells, discovery +"
