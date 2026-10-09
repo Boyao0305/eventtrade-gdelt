@@ -104,3 +104,17 @@ def test_events_15min_cat_key_includes_geo_and_reads_in_key_order(store):
     with pytest.raises(ValueError, match="columns"):
         store.write_gdelt_chunk("events_15min_cat", "events_15min_cat", chunk,
                                 rows.drop(columns="geo"), 0, NOW)
+
+
+
+def test_read_gdelt_entity_and_geo_filters(store):
+    from eventtrade.adapters.intraday_store import EVENTS_15MIN_CAT_COLUMNS
+
+    rows = pd.DataFrame([[e, g, 900 * k, *[1] * 12, 2.0, -1.0]
+                         for e in ("JA", "GM") for g in ("action", "actor") for k in range(3)],
+                        columns=EVENTS_15MIN_CAT_COLUMNS)
+    store.write_gdelt_chunk("events_15min_cat", "events_15min_cat",
+                            (date(2016, 1, 1), date(2016, 1, 31)), rows, 0, NOW)
+    got = store.read_gdelt("events_15min_cat", None, None, entity="JA", geo="actor")
+    assert len(got) == 3 and set(got["entity"]) == {"JA"} and set(got["geo"]) == {"actor"}
+    assert len(store.read_gdelt("events_15min_cat", 900, None, entity="GM")) == 4

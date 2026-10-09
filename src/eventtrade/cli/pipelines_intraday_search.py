@@ -172,11 +172,13 @@ def intraday_search(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo
     a_liq = [t for t, tr, _ in liquid if tr == "A"]
     b_liq = [t for t, tr, _ in liquid if tr == "B"]
     if any(c.track == "A" for c in specs):
-        cat = istore.read_gdelt("events_15min_cat", None, hold_ts)
-        if cat.empty:
+        def read(entity: str, geo: str) -> pd.DataFrame:
+            return istore.read_gdelt("events_15min_cat", None, hold_ts, entity=entity, geo=geo)
+
+        if read("_GLOBAL", "action").empty:
             echo("no 15-minute category rows: run `ingest-gdelt-15min events_cat`")
             return MISSING
-        _events_a(cat, a_liq, by_ticker, days, utc_slot, elig, index, group_of, specs,
+        _events_a(read, a_liq, by_ticker, days, utc_slot, elig, index, group_of, specs,
                   triggers, events)
     if any(c.track == "B" for c in specs):
         org = istore.read_gdelt("orgs_15min", None, hold_ts)
@@ -257,74 +259,74 @@ def _decluster(fires: np.ndarray, elig_i: np.ndarray, i: int) -> pd.DataFrame:
     return pd.DataFrame({"day": d, "asset": i, "j": first[d]})
 
 
-def _events_a(cat: pd.DataFrame, tickers: list[str], by_ticker: dict, days: np.ndarray,
+def country_slots(read: Any, countries: tuple[str, ...], geo: str, days: np.ndarray
+                  ) -> dict[str, np.ndarray]:
+    """Slot matrices of every category column, summed over `countries`, read entity by entity
+    (`read(entity, geo)` returns that entity's rows) so the ~31M-row table is never loaded."""
+    acc = {col: np.zeros((len(days), st.N_SLOTS)) for col in CAT_COLUMNS}
+    for ctry in countries:
+        g = read(ctry, geo)
+        if len(g):
+            for col in CAT_COLUMNS:
+                acc[col] += st.slot_matrix(g, col, days)
+    return acc
+
+
+def _events_a(read: Any, tickers: list[str], by_ticker: dict, days: np.ndarray,
               utc_slot: np.ndarray, elig: np.ndarray, index: dict[str, int],
               group_of: dict[str, str], specs: list[SearchCell], triggers: list[tuple],
               events: dict[str, dict[tuple, pd.DataFrame]]) -> None:
-    by = {(e, g): x for (e, g), x in cat.groupby(["entity", "geo"])}
-    glob = st.slot_matrix(by.get(("_GLOBAL", "action"), cat.iloc[0:0]), "n_events", days)
+    glob = st.slot_matrix(read("_GLOBAL", "action"), "n_events", days)
     missing = st.missing_batches(glob, ALL_SLOTS)
+    lw_pairs = sorted({(lt, w) for lt, w, _ in triggers})
+    valid = {lw: se.window_valid_lw(missing, *lw) for lw in lw_pairs}
+    gsum = {lw: se.window_sums_lw(glob, *lw) for lw in lw_pairs}
     want = {c.signal for c in specs if c.track == "A"}
-    mats: dict[tuple[str, str], dict[str, np.ndarray]] = {}
-
-    def slots(countries: tuple[str, ...], geo: str) -> dict[str, np.ndarray]:
-        key = (",".join(countries), geo)
-        if key not in mats:
-            acc = {col: np.zeros((len(days), st.N_SLOTS)) for col in CAT_COLUMNS}
-            for ctry in countries:
-                g = by.get((ctry, geo))
-                if g is not None:
-                    for col in CAT_COLUMNS:
-                        acc[col] += st.slot_matrix(g, col, days)
-            mats[key] = acc
-        return mats[key]
-
-    for lat, win in sorted({(lt, w) for lt, w, _ in triggers}):
-        valid = se.window_valid_lw(missing, lat, win)
-        G = se.window_sums_lw(glob, lat, win)
-        min_n = math.ceil(10 * win / 60)
-        for t in tickers:
-            a = by_ticker[t]
-            countries = tuple(a.fips_countries or [])
-            if not countries:
-                continue
-            i, grp = index[t], group_of[t]
-            sig_x: dict[str, tuple[np.ndarray, np.ndarray, str, int, np.ndarray]] = {}
-            act = slots(countries, "action")
+    collected: dict[tuple[str, tuple], list[pd.DataFrame]] = {}
+    for t in tickers:  # one asset's matrices in memory at a time
+        a = by_ticker[t]
+        countries = tuple(a.fips_countries or [])
+        if not countries:
+            continue
+        i, grp = index[t], group_of[t]
+        act = country_slots(read, countries, "action", days)
+        need_actor = grp != "commodity" and "actor_conflict" in want
+        actor = country_slots(read, countries, "actor", days) if need_actor else None
+        for lat, win in lw_pairs:
             E = se.window_sums_lw(act["n_events"], lat, win)
+            min_n = math.ceil(10 * win / 60)
+            sig_x: dict[str, tuple[np.ndarray, np.ndarray, str, int, np.ndarray]] = {}
             with np.errstate(all="ignore"):
                 if grp == "commodity":
                     for sig, cols in PRODUCER.items():
                         if sig in want:
-                            num = sum(se.window_sums_lw(act[col], lat, win) for col in cols)
+                            num = sum(se.window_sums_lw(act[c], lat, win) for c in cols)
                             sig_x[sig] = (num / E, E, "share", 1, E)
                 else:
                     for sig, (cols, geo) in A_FAMILIES.items():
                         if sig not in want:
                             continue
-                        src = act if geo == "action" else slots(countries, "actor")
+                        src = act if geo == "action" else actor
                         den = E if geo == "action" else se.window_sums_lw(src["n_events"], lat, win)
-                        num = sum(se.window_sums_lw(src[col], lat, win) for col in cols)
+                        num = sum(se.window_sums_lw(src[c], lat, win) for c in cols)
                         sig_x[sig] = (num / den, den, "share", 1, den)
                     if "tone" in want:
                         ar = se.window_sums_lw(act["n_articles"], lat, win)
                         tx = se.window_sums_lw(act["tone_x_articles"], lat, win)
                         sig_x["tone"] = (tx / ar, ar, "tone", -1, E)
                     if "attention" in want:
-                        sig_x["attention"] = (E / G, G, "share", 1, E)
+                        sig_x["attention"] = (E / gsum[(lat, win)], gsum[(lat, win)], "share", 1, E)
             for sig, (x, den, kind, side, activity) in sig_x.items():
-                z = st.at_tau(se.baseline_z_fast(x, den, valid, kind), utc_slot)
+                z = st.at_tau(se.baseline_z_fast(x, den, valid[(lat, win)], kind), utc_slot)
                 act_ok = st.at_tau(activity, utc_slot) >= min_n
-                for th in {th for lt, w, th in triggers if (lt, w) == (lat, win)}:
-                    fires = (side * z >= th) & act_ok
-                    ev = _decluster(fires, elig[i], i)
-                    key = f"A|{sig}|{grp}"
-                    if key in events:
-                        events[key].setdefault((lat, win, th), []).append(ev)  # type: ignore[arg-type]
-    for k, by_trig in events.items():
-        if k.startswith("A|"):
-            for trig, parts in list(by_trig.items()):
-                by_trig[trig] = pd.concat(parts, ignore_index=True) if parts else _empty()
+                key = f"A|{sig}|{grp}"
+                if key not in events:
+                    continue
+                for th in sorted({th for lt, w, th in triggers if (lt, w) == (lat, win)}):
+                    ev = _decluster((side * z >= th) & act_ok, elig[i], i)
+                    collected.setdefault((key, (lat, win, th)), []).append(ev)
+    for (key, trig), parts in collected.items():
+        events[key][trig] = pd.concat(parts, ignore_index=True) if parts else _empty()
 
 
 def _events_b(org: pd.DataFrame, tickers: list[str], days: np.ndarray, utc_slot: np.ndarray,

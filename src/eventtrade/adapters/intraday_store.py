@@ -157,10 +157,19 @@ class IntradayStore:
                           int(bytes_billed), _iso(now)))
         return len(recs)
 
-    def read_gdelt(self, table: str, start_ts: int | None, end_ts: int | None) -> pd.DataFrame:
+    def read_gdelt(self, table: str, start_ts: int | None, end_ts: int | None,
+                   entity: str | None = None, geo: str | None = None) -> pd.DataFrame:
+        """Rows with start_ts <= batch_ts < end_ts; optionally one entity (and geo), which the
+        primary key serves without a scan (the category table is ~31M rows)."""
         cols = _GDELT_TABLES[table]
         q = f"SELECT {', '.join(cols)} FROM {table} WHERE 1=1"
         args: list = []
+        if entity is not None:
+            q += " AND entity = ?"
+            args.append(entity)
+        if geo is not None:
+            q += " AND geo = ?"
+            args.append(geo)
         if start_ts is not None:
             q += " AND batch_ts >= ?"
             args.append(int(start_ts))

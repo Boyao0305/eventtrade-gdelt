@@ -21,8 +21,8 @@ import pandas as pd
 from eventtrade.cli.pipelines import MISSING, OK, REFUSED, Clock, Echo, _log_trial, _num
 from eventtrade.cli.pipelines_intraday_search import (
     ALL_SLOTS,
-    CAT_COLUMNS,
     _leg,
+    country_slots,
 )
 from eventtrade.cli.pipelines_intraday_study import (
     CONFIRMATION,
@@ -147,12 +147,14 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
     echo(f"prices: {len(liquid)} liquid assets, {nd} days [{_time.time() - t0:.0f}s]")
 
     # --- category z (full slot grid), fires, events ----------------------------------------------
-    cat = istore.read_gdelt("events_15min_cat", None, hold_ts)
+    def read(entity: str, geo: str) -> pd.DataFrame:
+        return istore.read_gdelt("events_15min_cat", None, hold_ts, entity=entity, geo=geo)
+
     org = istore.read_gdelt("orgs_15min", None, hold_ts)
-    if cat.empty or org.empty:
+    if read("_GLOBAL", "action").empty or org.empty:
         echo("need `ingest-gdelt-15min events_cat` and `orgs`")
         return MISSING
-    sig_data = _signal_grids(cat, org, liquid, by_ticker, group_of, days)
+    sig_data = _signal_grids(read, org, liquid, by_ticker, group_of, days)
     events: dict[tuple[str, str], pd.DataFrame] = {}
     n_fresh: dict[tuple[str, str], tuple[int, int]] = {}
     for (sig, grp, _s) in pairs():
@@ -257,11 +259,10 @@ def foresight(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo = pri
     return OK
 
 
-def _signal_grids(cat, org, liquid, by_ticker, group_of, days):
+def _signal_grids(read, org, liquid, by_ticker, group_of, days):
     """{signal: {ticker: (z [nd, 96], fire [nd, 96])}} at L = 15, W = 60, theta = 3."""
     out: dict[str, dict[str, tuple[np.ndarray, np.ndarray]]] = {}
-    by = {(e, g): x for (e, g), x in cat.groupby(["entity", "geo"])}
-    glob = st.slot_matrix(by.get(("_GLOBAL", "action"), cat.iloc[0:0]), "n_events", days)
+    glob = st.slot_matrix(read("_GLOBAL", "action"), "n_events", days)
     valid = se.window_valid_lw(st.missing_batches(glob, ALL_SLOTS), L_MIN, W_MIN)
     G = se.window_sums_lw(glob, L_MIN, W_MIN)
 
@@ -272,12 +273,7 @@ def _signal_grids(cat, org, liquid, by_ticker, group_of, days):
         if tr != "A":
             continue
         countries = tuple(by_ticker[t].fips_countries or [])
-        acc = {c: np.zeros((len(days), st.N_SLOTS)) for c in CAT_COLUMNS}
-        for ctry in countries:
-            g = by.get((ctry, "action"))
-            if g is not None:
-                for c in CAT_COLUMNS:
-                    acc[c] += st.slot_matrix(g, c, days)
+        acc = country_slots(read, countries, "action", days)
         E = se.window_sums_lw(acc["n_events"], L_MIN, W_MIN)
         act = E >= 10
         specs: dict[str, tuple] = {}
