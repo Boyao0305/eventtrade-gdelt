@@ -64,14 +64,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                                       args.end, args.execute, False, now,
                                       BudgetExceeded)
     if cmd == "ingest-gdelt-15min":
-        from eventtrade.adapters.gdelt_bq import BudgetExceeded
+        from eventtrade.adapters.gdelt_bq import BudgetExceeded, cameo_fips_table
         from eventtrade.cli import pipelines_intraday as pi
 
         if args.budget_gb is not None:
             cfg = cfg.model_copy(update={"bq_monthly_budget_bytes": args.budget_gb * 10**9})
 
         return pi.ingest_gdelt_15min(cfg, store, _istore(cfg), _gdelt(cfg, store), args.dataset,
-                                     args.start, args.end, args.execute, now, BudgetExceeded)
+                                     args.start, args.end, args.execute, now, BudgetExceeded,
+                                     cameo_fips=cameo_fips_table())
     if cmd == "ingest-intraday":
         from eventtrade.cli import pipelines_intraday as pi
 
@@ -146,9 +147,10 @@ def _parser() -> argparse.ArgumentParser:
                    help="month-to-date BigQuery budget for this run, in GB (default: config 900;"
                         f" at most {BQ_BUDGET_CEILING_GB}, the $20 cap over the free tier)")
 
-    s = sub.add_parser("ingest-gdelt-15min", help="ADR 0007: dry-run (default) or pull 15-minute"
+    s = sub.add_parser("ingest-gdelt-15min", help="ADR 0007/0008: dry-run (default) or pull"
+                                                  " 15-minute"
                                                   " GDELT counts into data/intraday.sqlite")
-    s.add_argument("dataset", choices=("events", "orgs"))
+    s.add_argument("dataset", choices=("events", "orgs", "events_cat"))
     s.add_argument("--start", type=_date, default=None, help="first ET day (default 2015-12-01)")
     s.add_argument("--end", type=_date, default=None,
                    help="last ET day, inclusive; default 2025-03-31; must be before the hold-out")

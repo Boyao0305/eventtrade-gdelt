@@ -302,6 +302,7 @@ PULL_QUERIES = {
     "gkg_orgs_daily": {"cutoff_et": "15:30", "aliases": ["a"]},
     "events_15min": {"countries": ["JA"]},
     "gkg_orgs_15min": {"aliases": ["a"], "alias_tickers": ["A"]},
+    "events_15min_cat": {"countries": ["JA"], "cameo_codes": ["JPN"], "cameo_fips": ["JA"]},
     "session_date_check": {"cutoff_et": "15:30", "dateadded": [20250310193000]},
     "partition_probe": {},
     "lag_sample": {},
@@ -428,6 +429,8 @@ def test_bigquery_15min_dry_runs_compile() -> None:
     bq = _real_bq()
     assert bq.estimate("events_15min", D, D, countries=["JA"]) > 0
     assert bq.estimate("gkg_orgs_15min", D, D, aliases=["apple inc"], alias_tickers=["AAPL"]) > 0
+    assert bq.estimate("events_15min_cat", D, D, countries=["JA"], cameo_codes=["JPN"],
+                       cameo_fips=["JA"]) > 0
 
 
 # --- ADR 0007: 15-minute queries ------------------------------------------------------------
@@ -561,3 +564,176 @@ def test_orgs_15min_sql_counts_a_document_once_per_ticker() -> None:
     assert "JOIN UNNEST(@aliases) AS a WITH OFFSET AS i ON LOWER(o) = a" in code
     assert "SELECT '_GLOBAL' AS entity, batch_ts, COUNT(*) AS docs" in code
     assert "SPLIT(V2Tone, ',')[SAFE_OFFSET(0)]" in code
+
+
+# --- ADR 0008: events by category (events_15min_cat) ----------------------------------------
+
+# The FIPS 10-4 countries of the Track A trial assets (store, 2026-10-09), and the CAMEO actor
+# country code (ISO-3166 alpha-3 style) of each. FIPS traps: AS Australia / AU Austria, SF South
+# Africa, SZ Switzerland, SW Sweden, SN Singapore, RP Philippines, KS South Korea, UP Ukraine,
+# ZA Zambia, CG DR Congo, EI Ireland, IZ Iraq, NI Nigeria, KU Kuwait, VM Vietnam, CI Chile,
+# CH China, AG Algeria, GM Germany, DA Denmark, SP Spain, TU Turkey.
+CAMEO_FIPS = {
+    "ARE": "AE", "DZA": "AG", "ARG": "AR", "AUS": "AS", "AUT": "AU", "BEL": "BE", "BRA": "BR",
+    "CAN": "CA", "COD": "CG", "CHN": "CH", "CHL": "CI", "DNK": "DA", "IRL": "EI", "FRA": "FR",
+    "DEU": "GM", "GRC": "GR", "HKG": "HK", "IDN": "ID", "IND": "IN", "IRN": "IR", "ISR": "IS",
+    "ITA": "IT", "IRQ": "IZ", "JPN": "JA", "KOR": "KS", "KWT": "KU", "KAZ": "KZ", "LBY": "LY",
+    "MEX": "MX", "MYS": "MY", "NGA": "NI", "NLD": "NL", "NOR": "NO", "NZL": "NZ", "PER": "PE",
+    "POL": "PL", "QAT": "QA", "PHL": "RP", "RUS": "RS", "SAU": "SA", "ZAF": "SF", "SGP": "SN",
+    "ESP": "SP", "SWE": "SW", "CHE": "SZ", "THA": "TH", "TUR": "TU", "TWN": "TW", "GBR": "UK",
+    "UKR": "UP", "USA": "US", "VEN": "VE", "VNM": "VM", "ZMB": "ZA",
+}
+TRACK_A_FIPS = [
+    "AE", "AG", "AR", "AS", "AU", "BE", "BR", "CA", "CG", "CH", "CI", "DA", "EI", "FR", "GM",
+    "GR", "HK", "ID", "IN", "IR", "IS", "IT", "IZ", "JA", "KS", "KU", "KZ", "LY", "MX", "MY",
+    "NI", "NL", "NO", "NZ", "PE", "PL", "QA", "RP", "RS", "SA", "SF", "SN", "SP", "SW", "SZ",
+    "TH", "TU", "TW", "UK", "UP", "US", "VE", "VM", "ZA",
+]
+
+
+def test_cameo_fips_table_is_pinned_and_covers_every_track_a_country_once() -> None:
+    from eventtrade.adapters.gdelt_bq import cameo_fips_table
+
+    rows = cameo_fips_table()
+    assert dict(rows) == CAMEO_FIPS and len(rows) == len(CAMEO_FIPS)
+    fips = [f for _, f in rows]
+    assert len(TRACK_A_FIPS) == 54
+    assert sorted(fips) == sorted(TRACK_A_FIPS)  # each of the 54 exactly once, nothing else
+
+
+def test_cameo_fips_table_rejects_malformed_files(tmp_path: Path) -> None:
+    from eventtrade.adapters.gdelt_bq import cameo_fips_table
+
+    for body in ("code,fips\nJPN,JA\n", "cameo_code,fips\nJP,JA\n",
+                 "cameo_code,fips\njpn,JA\n", "cameo_code,fips\nJPN,JA\nJPN,KS\n"):
+        path = tmp_path / "m.csv"
+        path.write_text(body, encoding="utf-8")
+        with pytest.raises(ValueError):
+            cameo_fips_table(path)
+
+
+def test_events_15min_cat_binding_parallel_arrays_and_lookback_partitions() -> None:
+    client = FakeClient(estimate=1)
+    _, billed = _bq(client, FakeUsage(), lookback=30).pull_events_15min_cat(
+        date(2016, 1, 1), date(2016, 12, 31), ["JA", " GM", "JA"],
+        ["JPN", "DEU", "JPN", " USA"], ["JA", "GM", "JA", "US"],
+    )
+    p, t = _params(client.calls[1][1]), _types(client.calls[1][1])
+    assert p["countries"] == ["GM", "JA"]
+    # duplicate pairs dropped, stripped, still aligned; sorted by CAMEO code
+    assert list(zip(p["cameo_codes"], p["cameo_fips"], strict=True)) == [
+        ("DEU", "GM"), ("JPN", "JA"), ("USA", "US")]
+    assert t["cameo_codes"] == "STRING" and t["cameo_fips"] == "STRING"
+    assert (p["ev_part_start"], p["ev_part_end"]) == (date(2015, 12, 2), date(2016, 12, 31))
+    assert p["lookback_days"] == 30 and "cutoff_et" not in p
+    assert billed == MIB10
+    assert client.calls[1][0] == (QUERIES_DIR / "events_15min_cat.sql").read_text(
+        encoding="utf-8")
+
+
+def test_events_15min_cat_rejects_bad_arrays_before_any_query() -> None:
+    client = FakeClient(estimate=1)
+    bq = _bq(client, FakeUsage())
+    with pytest.raises(ValueError, match="cameo_fips"):
+        bq.pull_events_15min_cat(D, D, ["JA"], ["JPN", "DEU"], ["JA"])
+    with pytest.raises(ValueError, match="same length"):
+        bq.estimate("events_15min_cat", D, D, countries=["JA"], cameo_codes=["JPN", "DEU"],
+                    cameo_fips=["JA"])
+    with pytest.raises(ValueError):
+        bq.pull_events_15min_cat(D, D, ["JA"], [" "], ["JA"])
+    with pytest.raises(ValueError):
+        bq.pull_events_15min_cat(D, D, [], ["JPN"], ["JA"])
+    assert client.calls == []
+
+
+def test_events_15min_cat_goes_through_the_budget_guard() -> None:
+    client, usage = FakeClient(estimate=60 * 10**9), FakeUsage()
+    with pytest.raises(BudgetExceeded, match="per-query cap"):
+        _bq(client, usage).pull_events_15min_cat(D, D, ["JA"], ["JPN"], ["JA"])
+    assert len(client.calls) == 1 and client.calls[0][1].dry_run
+    client, usage = FakeClient(estimate=1 * 10**9), FakeUsage(spent=895 * 10**9)
+    _bq(client, usage).pull_events_15min_cat(D, D, ["JA"], ["JPN"], ["JA"])
+    assert client.calls[1][1].maximum_bytes_billed == 5 * 10**9
+    assert [(u.query_name, u.dry_run) for u in usage.rows] == [
+        ("events_15min_cat", True),
+        ("events_15min_cat", False),
+    ]
+
+
+def test_events_15min_cat_output_columns_dtypes_and_order() -> None:
+    from eventtrade.adapters.intraday_store import EVENTS_15MIN_CAT_COLUMNS
+
+    def row(entity: str, geo: str) -> list:
+        return [entity, geo, 1457010000, 3, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 7, -2.5]
+
+    rows = pd.DataFrame([row("JA", "actor"), row("_GLOBAL", "action"), row("JA", "action")],
+                        columns=EVENTS_15MIN_CAT_COLUMNS)
+    df, _ = _bq(FakeClient(1, rows), FakeUsage()).pull_events_15min_cat(D, D, ["JA"], ["JPN"],
+                                                                       ["JA"])
+    assert list(df.columns) == EVENTS_15MIN_CAT_COLUMNS
+    assert list(zip(df["entity"], df["geo"], strict=True)) == [
+        ("JA", "action"), ("JA", "actor"), ("_GLOBAL", "action")]
+    for c in ["batch_ts", "n_events", "q1", "q2", "q3", "q4", "r14", "r16", "r17", "r18", "r19",
+              "r20", "b163"]:
+        assert df[c].dtype == "int64", c
+    assert df["n_articles"].dtype == float and df["tone_x_articles"].dtype == float
+    empty, _ = _bq(FakeClient(1, pd.DataFrame()), FakeUsage()).pull_events_15min_cat(
+        D, D, ["JA"], ["JPN"], ["JA"])
+    assert list(empty.columns) == EVENTS_15MIN_CAT_COLUMNS and empty.empty
+    assert empty["q1"].dtype == "int64"
+
+
+def test_events_15min_cat_sql_keeps_events_15min_rows_and_dedup() -> None:
+    code, base = _code("events_15min_cat"), _code("events_15min")
+    assert "SQLDATE" not in code  # timing by DATEADDED only
+    for rule in (
+        "DATE(added, 'America/New_York') AS et_day",
+        "GROUP BY et_day, SOURCEURL, EventCode, ActionGeo_FeatureID, ActionGeo_CountryCode",
+        "ORDER BY DATEADDED, GLOBALEVENTID LIMIT 1 )[OFFSET(0)]",
+        "WHERE et_day BETWEEN @start AND @end",
+        "event_day >= DATE_SUB(et_day, INTERVAL @lookback_days DAY)",
+        "event_day <= DATE(added)",
+        "DIV(UNIX_SECONDS(first.added) + 899, 900) * 900 AS batch_ts",
+        "UNNEST(IF(country IN UNNEST(@countries), [country, '_GLOBAL'], ['_GLOBAL']))",
+    ):
+        assert rule in code and rule in base, rule
+    # every measure comes from the earliest row of the dedup group, for both geos
+    struct = ("STRUCT(added, QuadClass AS quad, EventRootCode AS root, EventBaseCode AS base,"
+              " NumArticles AS n_articles, AvgTone AS tone) ORDER BY DATEADDED, GLOBALEVENTID"
+              " LIMIT 1 )[OFFSET(0)] AS first")
+    assert code.count(struct) == 2
+    # both dedups read the eligible rows (ET day range, lookback, SQLDATE <= UTC day of DATEADDED)
+    assert code.index("eligible AS (") < code.index("event_day <= DATE(added)") < code.index(
+        "action_ev AS (")
+    assert "FROM eligible GROUP BY et_day, SOURCEURL, EventCode, ActionGeo_FeatureID" in code
+    assert "FROM eligible AS e JOIN UNNEST(@cameo_codes)" in code
+
+
+def test_events_15min_cat_sql_keeps_every_batch() -> None:
+    code = _code("events_15min_cat")
+    assert "+ 899, 900) * 900" in code  # round UP to the 15-minute grid
+    # ADR 0008: weekends and all 96 UTC slots are kept (no weekday or 12:00-19:45 UTC filter)
+    assert "DAYOFWEEK" not in code and "MOD(batch_ts" not in code and "86400" not in code
+    assert "session_date" not in code and "@cutoff_et" not in code
+
+
+def test_events_15min_cat_sql_categories_and_actor_attribution() -> None:
+    code = _code("events_15min_cat")
+    for q in (1, 2, 3, 4):
+        assert f"COUNTIF(quad = {q}) AS q{q}" in code
+    for r in (14, 16, 17, 18, 19, 20):
+        assert f"COUNTIF(root = '{r}') AS r{r}" in code
+    assert "COUNTIF(base = '163') AS b163" in code
+    assert "IFNULL(SUM(tone * n_articles), 0) AS tone_x_articles" in code
+    # actor geo: Actor1/Actor2CountryCode only (no ActorGeo, no Actor*Code prefix), mapped
+    # through the parallel arrays; unmapped codes drop out of the inner join
+    assert "Actor1Geo" not in code and "Actor2Geo" not in code and "Actor1Code" not in code
+    assert ("SELECT e.*, @cameo_fips[OFFSET(i)] AS fips FROM eligible AS e JOIN"
+            " UNNEST(@cameo_codes) AS k WITH OFFSET AS i ON k IN (e.Actor1CountryCode,"
+            " e.Actor2CountryCode)") in code
+    # dedup per (ET day, SOURCEURL, EventCode, actor country): once per distinct actor country
+    assert ("FROM actor_mapped WHERE fips IN UNNEST(@countries)"
+            " GROUP BY et_day, SOURCEURL, EventCode, fips") in code
+    assert "SELECT fips AS entity, 'actor' AS geo, first FROM actor_ev" in code
+    assert "SELECT entity, 'action' AS geo, first FROM action_ev" in code
+    assert "GROUP BY entity, geo, batch_ts" in code

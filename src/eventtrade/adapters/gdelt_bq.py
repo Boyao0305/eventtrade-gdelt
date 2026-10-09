@@ -21,6 +21,11 @@ row, so results do not depend on the width of the pull window.
 calendar days, not cutoff-rolled sessions, and stamp rows by 15-minute batch (epoch seconds UTC).
 They use the same guard but no session roll: GKG partitions are the UTC days start..end (every
 kept batch, 12:00-19:45 UTC, lies on its ET day), events partitions reach back ``lookback_days``.
+``events_15min_cat`` (ADR 0008) reads the same eligible rows as ``events_15min``, keeps every
+batch (weekends and all 96 UTC slots), and splits counts by category (QuadClass, root and base
+codes) and by attribution: ActionGeo country (dedup as ``events_15min``) or actor country
+(Actor1/Actor2CountryCode mapped from CAMEO to FIPS by the committed ``cameo_fips.csv``, dedup
+per actor country).
 """
 
 from __future__ import annotations
@@ -34,17 +39,28 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from eventtrade.adapters.intraday_store import EVENTS_15MIN_COLUMNS, ORGS_15MIN_COLUMNS
+from eventtrade.adapters.intraday_store import (
+    EVENTS_15MIN_CAT_COLUMNS,
+    EVENTS_15MIN_CAT_COUNTS,
+    EVENTS_15MIN_COLUMNS,
+    ORGS_15MIN_COLUMNS,
+    gdelt_key,
+)
 from eventtrade.schemas import GDELT_DAILY_COLUMNS, BqUsage
 
 QUERIES_DIR = Path(__file__).parent / "queries"
+# ADR 0008: CAMEO actor country code -> FIPS 10-4 country of the Track A universe (committed).
+CAMEO_FIPS_PATH = Path(__file__).parent / "cameo_fips.csv"
 _NY = ZoneInfo("America/New_York")
 DEFAULT_LOOKBACK_DAYS = 30  # events dated > 30 days before being added: ~0.5% of rows (exp. 0001)
 _MIN_BILLED_BYTES = 10 * 1024**2  # BigQuery bills at least 10 MiB per query that reads a table
 _RESULT_TIMEOUT_S = 600.0
 EVENTS_15MIN = "events_15min"
 ORGS_15MIN = "gkg_orgs_15min"
-_15MIN_QUERIES = (EVENTS_15MIN, ORGS_15MIN)
+EVENTS_15MIN_CAT = "events_15min_cat"
+_15MIN_QUERIES = (EVENTS_15MIN, ORGS_15MIN, EVENTS_15MIN_CAT)
+_PARALLEL = {ORGS_15MIN: ("aliases", "alias_tickers"),
+             EVENTS_15MIN_CAT: ("cameo_codes", "cameo_fips")}
 
 
 class UsageLog(Protocol):
@@ -65,6 +81,32 @@ def session_date_of(dateadded: int, cutoff_et: str) -> date:
     local = utc.astimezone(_NY)
     day = local.date()
     return day + timedelta(days=1) if local.time() > _parse_cutoff(cutoff_et) else day
+
+
+def cameo_fips_table(path: Path = CAMEO_FIPS_PATH) -> list[tuple[str, str]]:
+    """(cameo_code, fips) rows of the committed mapping, in file order. Raises ValueError on a
+    malformed file (header, 3-letter CAMEO / 2-letter FIPS codes, duplicate CAMEO codes).
+
+    The file maps one CAMEO actor country code to each FIPS 10-4 country of the Track A
+    universe (54 on 2026-10-09). For all 54 the CAMEO code is the ISO 3166-1 alpha-3 code,
+    including HKG -> HK (Hong Kong), TWN -> TW (Taiwan) and COD -> CG (DR Congo; FIPS CF is
+    Congo-Brazzaville, CAMEO COG). CAMEO codes that differ from ISO (e.g. ROM for Romania,
+    ISO ROU) belong to no Track A country and are not listed. Regional / IGO codes (AFR, EUR,
+    MEA, WSB, ...) are deliberately unmapped: they name no country."""
+    lines = [ln.strip() for ln in Path(path).read_text(encoding="utf-8").splitlines()
+             if ln.strip()]
+    if not lines or lines[0] != "cameo_code,fips":
+        raise ValueError(f"{path}: header must be 'cameo_code,fips'")
+    rows: list[tuple[str, str]] = []
+    for ln in lines[1:]:
+        m = re.fullmatch(r"([A-Z]{3}),([A-Z]{2})", ln)
+        if not m:
+            raise ValueError(f"{path}: bad row {ln!r}")
+        rows.append((m[1], m[2]))
+    codes = [c for c, _ in rows]
+    if len(set(codes)) != len(codes):
+        raise ValueError(f"{path}: duplicate CAMEO codes")
+    return rows
 
 
 def partition_window(start: date, end: date, cutoff_et: str) -> tuple[date, date]:
@@ -155,6 +197,26 @@ class GdeltBigQuery:
         df, billed = self._query_billed(ORGS_15MIN, start, end, params)
         return _to_15min(df, ORGS_15MIN_COLUMNS), billed
 
+    def pull_events_15min_cat(
+        self, start: date, end: date, countries: list[str], cameo_codes: list[str],
+        cameo_fips: list[str],
+    ) -> tuple[pd.DataFrame, int]:
+        """ADR 0008 event category counts per (entity, geo, 15-minute batch) for ET days
+        start..end, and the bytes billed. cameo_codes[i] (CAMEO actor country) maps to FIPS
+        cameo_fips[i]. Columns: intraday_store.EVENTS_15MIN_CAT_COLUMNS."""
+        if len(cameo_codes) != len(cameo_fips):
+            raise ValueError(f"{len(cameo_codes)} cameo_codes but {len(cameo_fips)} cameo_fips")
+        clean = sorted({c.strip() for c in _nonempty(countries, "countries")})
+        pairs = sorted({(c.strip(), f.strip()) for c, f in zip(cameo_codes, cameo_fips,
+                                                               strict=True)
+                        if c.strip() and f.strip()})
+        if not pairs:
+            raise ValueError("cameo_codes must be a non-empty list of strings")
+        params = {"countries": clean, "cameo_codes": [c for c, _ in pairs],
+                  "cameo_fips": [f for _, f in pairs]}
+        df, billed = self._query_billed(EVENTS_15MIN_CAT, start, end, params)
+        return _to_15min(df, EVENTS_15MIN_CAT_COLUMNS), billed
+
     # --- internals ----------------------------------------------------------------------------
 
     def _query_billed(
@@ -180,10 +242,10 @@ class GdeltBigQuery:
             raise ValueError(f"end {end} is before start {start}")
         bound: dict[str, Any] = {"start": start, "end": end}
         if query_name in _15MIN_QUERIES:
-            if query_name == ORGS_15MIN and (
-                len(params.get("aliases", [])) != len(params.get("alias_tickers", []))
-            ):
-                raise ValueError("aliases and alias_tickers must have the same length")
+            if query_name in _PARALLEL:
+                a, b = _PARALLEL[query_name]
+                if len(params.get(a, [])) != len(params.get(b, [])):
+                    raise ValueError(f"{a} and {b} must have the same length")
             bound |= {
                 "gkg_part_start": start,
                 "gkg_part_end": end,
@@ -336,16 +398,17 @@ def _to_daily(df: pd.DataFrame, source: str) -> pd.DataFrame:
 
 
 def _to_15min(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """BigQuery rows -> the intraday store's 15-minute columns: str entity, int64 batch_ts and
-    counts, float sums; sorted by (entity, batch_ts)."""
-    ints = {"batch_ts", "n_events", "n_conflict", "docs"}
+    """BigQuery rows -> the intraday store's 15-minute columns: str entity/geo, int64 batch_ts
+    and counts, float sums; sorted by the table key (entity[, geo], batch_ts)."""
+    strs = {"entity", "geo"}
+    ints = {"batch_ts", "n_conflict", "docs", *EVENTS_15MIN_CAT_COUNTS}
     out = pd.DataFrame({
-        c: (df[c].astype(str) if c == "entity"
+        c: (df[c].astype(str) if c in strs
             else pd.to_numeric(df[c]).astype("int64" if c in ints else float))
         for c in columns
     }) if not df.empty else pd.DataFrame({
-        c: pd.Series(dtype=object if c == "entity" else "int64" if c in ints else float)
+        c: pd.Series(dtype=object if c in strs else "int64" if c in ints else float)
         for c in columns
     })
-    out = out.sort_values(["entity", "batch_ts"], kind="stable")
+    out = out.sort_values(gdelt_key(columns), kind="stable")
     return out[columns].reset_index(drop=True)

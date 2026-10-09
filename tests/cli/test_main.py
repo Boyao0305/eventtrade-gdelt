@@ -133,9 +133,10 @@ def test_ingest_gdelt_15min_wiring_and_budget_override(tmp_path: Path, monkeypat
         seen["budget"] = cfg.bq_monthly_budget_bytes
         return "gdelt"
 
-    def fake_ingest(cfg, store, istore, gdelt, dataset, start, end, execute, now, err):
+    def fake_ingest(cfg, store, istore, gdelt, dataset, start, end, execute, now, err,
+                    cameo_fips=None):
         seen.update(gdelt=gdelt, dataset=dataset, start=start, execute=execute,
-                    istore=istore.path.name, err=err.__name__)
+                    istore=istore.path.name, err=err.__name__, n_cameo=len(cameo_fips))
         return 0
 
     monkeypatch.setattr(cli, "_gdelt", fake_gdelt)
@@ -145,6 +146,8 @@ def test_ingest_gdelt_15min_wiring_and_budget_override(tmp_path: Path, monkeypat
                      "--start", "2016-01-01"]) == 0
     assert seen == {"budget": 1200 * 10**9, "gdelt": "gdelt", "dataset": "orgs",
                     "start": date(2016, 1, 1), "execute": False, "istore": "intraday.sqlite",
-                    "err": "BudgetExceeded"}
+                    "err": "BudgetExceeded", "n_cameo": 54}
     assert cli.main(["--home", str(tmp_path), "ingest-gdelt-15min", "events", "--execute"]) == 0
     assert seen["budget"] == 900 * 10**9 and seen["dataset"] == "events" and seen["execute"]
+    assert cli.main(["--home", str(tmp_path), "ingest-gdelt-15min", "events_cat"]) == 0
+    assert seen["dataset"] == "events_cat" and not seen["execute"] and seen["n_cameo"] == 54

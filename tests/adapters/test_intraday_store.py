@@ -5,7 +5,11 @@ from datetime import UTC, date, datetime
 import pandas as pd
 import pytest
 
-from eventtrade.adapters.intraday_store import EVENTS_15MIN_COLUMNS, IntradayStore
+from eventtrade.adapters.intraday_store import (
+    EVENTS_15MIN_CAT_COLUMNS,
+    EVENTS_15MIN_COLUMNS,
+    IntradayStore,
+)
 
 NOW = datetime(2026, 10, 7, tzinfo=UTC)
 
@@ -67,3 +71,36 @@ def test_gdelt_chunk_ledger_and_columns(store):
     with pytest.raises(ValueError, match="columns"):
         store.write_gdelt_chunk("orgs_15min", "orgs_15min", chunk, rows, 0, NOW)
     assert store.counts()["events_15min"] == 2
+
+
+def _cat_row(entity: str, geo: str, ts: int, n: int) -> list:
+    return [entity, geo, ts, n, 1, 0, 2, 0, 1, 0, 0, 1, 0, 0, 1, 7.0, -2.5]
+
+
+def test_events_15min_cat_key_includes_geo_and_reads_in_key_order(store):
+    assert EVENTS_15MIN_CAT_COLUMNS[:3] == ["entity", "geo", "batch_ts"]
+    assert len(EVENTS_15MIN_CAT_COLUMNS) == 17
+    rows = pd.DataFrame([_cat_row("JA", "actor", 200, 3), _cat_row("JA", "action", 200, 5),
+                         _cat_row("JA", "action", 100, 4), _cat_row("_GLOBAL", "action", 100, 9)],
+                        columns=EVENTS_15MIN_CAT_COLUMNS)
+    chunk = (date(2016, 1, 1), date(2016, 12, 31))
+    n = store.write_gdelt_chunk("events_15min_cat", "events_15min_cat", chunk, rows, 5, NOW)
+    assert n == 4  # (JA, action, 200) and (JA, actor, 200) are distinct keys
+    out = store.read_gdelt("events_15min_cat", None, None)
+    assert list(out.columns) == EVENTS_15MIN_CAT_COLUMNS
+    assert list(zip(out["entity"], out["geo"], out["batch_ts"], strict=True)) == [
+        ("JA", "action", 100), ("JA", "action", 200), ("JA", "actor", 200),
+        ("_GLOBAL", "action", 100)]
+    assert out["b163"].tolist() == [1, 1, 1, 1] and out["tone_x_articles"].iloc[0] == -2.5
+    assert len(store.read_gdelt("events_15min_cat", 150, None)) == 2  # half-open on batch_ts
+    assert store.pulled_chunks("events_15min_cat") == {chunk}
+    assert store.pulled_chunks("events_15min") == set()
+    # a re-pulled chunk replaces its rows (upsert on the key)
+    again = pd.DataFrame([_cat_row("JA", "actor", 200, 8)], columns=EVENTS_15MIN_CAT_COLUMNS)
+    store.write_gdelt_chunk("events_15min_cat", "events_15min_cat", chunk, again, 5, NOW)
+    got = store.read_gdelt("events_15min_cat", None, None)
+    assert got.loc[got["geo"] == "actor", "n_events"].tolist() == [8]
+    assert store.counts()["events_15min_cat"] == 4
+    with pytest.raises(ValueError, match="columns"):
+        store.write_gdelt_chunk("events_15min_cat", "events_15min_cat", chunk,
+                                rows.drop(columns="geo"), 0, NOW)

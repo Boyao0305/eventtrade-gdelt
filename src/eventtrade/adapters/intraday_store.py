@@ -10,6 +10,9 @@ Tables (no schema.sql; convention §0.3). Timestamps are integer epoch seconds, 
     PK (entity, batch_ts). entity = FIPS country or '_GLOBAL'.
 - orgs_15min(entity, batch_ts, docs, tone_sum)           PK (entity, batch_ts). entity = ticker
     or '_GLOBAL' (all GKG docs of the batch).
+- events_15min_cat(entity, geo, batch_ts, n_events, q1..q4, r14, r16..r20, b163, n_articles,
+    tone_x_articles)  PK (entity, geo, batch_ts), ADR 0008. geo 'action' (entity = ActionGeo FIPS
+    country or '_GLOBAL') or 'actor' (Actor1/Actor2 country, CAMEO mapped to FIPS).
 - gdelt_pulls(query_name, chunk_start, chunk_end, rows, bytes_billed, pulled_at)
     PK (query_name, chunk_start, chunk_end). Resume ledger for the 15-minute GDELT pulls.
 
@@ -32,7 +35,12 @@ from eventtrade.schemas import INTRADAY_COLUMNS
 EVENTS_15MIN_COLUMNS = ["entity", "batch_ts", "n_events", "n_conflict", "n_articles",
                         "tone_x_articles"]
 ORGS_15MIN_COLUMNS = ["entity", "batch_ts", "docs", "tone_sum"]
-_GDELT_TABLES = {"events_15min": EVENTS_15MIN_COLUMNS, "orgs_15min": ORGS_15MIN_COLUMNS}
+EVENTS_15MIN_CAT_COUNTS = ["n_events", "q1", "q2", "q3", "q4", "r14", "r16", "r17", "r18", "r19",
+                           "r20", "b163"]
+EVENTS_15MIN_CAT_COLUMNS = ["entity", "geo", "batch_ts", *EVENTS_15MIN_CAT_COUNTS, "n_articles",
+                            "tone_x_articles"]
+_GDELT_TABLES = {"events_15min": EVENTS_15MIN_COLUMNS, "orgs_15min": ORGS_15MIN_COLUMNS,
+                 "events_15min_cat": EVENTS_15MIN_CAT_COLUMNS}
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS intraday_bars (
@@ -54,6 +62,14 @@ CREATE TABLE IF NOT EXISTS events_15min (
 CREATE TABLE IF NOT EXISTS orgs_15min (
     entity TEXT NOT NULL, batch_ts INTEGER NOT NULL, docs INTEGER NOT NULL, tone_sum REAL NOT NULL,
     PRIMARY KEY (entity, batch_ts)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS events_15min_cat (
+    entity TEXT NOT NULL, geo TEXT NOT NULL, batch_ts INTEGER NOT NULL,
+    n_events INTEGER NOT NULL, q1 INTEGER NOT NULL, q2 INTEGER NOT NULL, q3 INTEGER NOT NULL,
+    q4 INTEGER NOT NULL, r14 INTEGER NOT NULL, r16 INTEGER NOT NULL, r17 INTEGER NOT NULL,
+    r18 INTEGER NOT NULL, r19 INTEGER NOT NULL, r20 INTEGER NOT NULL, b163 INTEGER NOT NULL,
+    n_articles REAL NOT NULL, tone_x_articles REAL NOT NULL,
+    PRIMARY KEY (entity, geo, batch_ts)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS gdelt_pulls (
     query_name TEXT NOT NULL, chunk_start TEXT NOT NULL, chunk_end TEXT NOT NULL,
@@ -152,13 +168,14 @@ class IntradayStore:
             q += " AND batch_ts < ?"
             args.append(int(end_ts))
         with self._conn() as conn:
-            return pd.read_sql_query(q + " ORDER BY entity, batch_ts", conn, params=args)[cols]
+            return pd.read_sql_query(f"{q} ORDER BY {', '.join(gdelt_key(cols))}", conn,
+                                     params=args)[cols]
 
     def counts(self) -> dict[str, int]:
         with self._conn() as conn:
             return {t: int(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
                     for t in ("intraday_bars", "intraday_fetches", "events_15min", "orgs_15min",
-                              "gdelt_pulls")}
+                              "events_15min_cat", "gdelt_pulls")}
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -170,6 +187,11 @@ class IntradayStore:
                 yield conn
         finally:
             conn.close()
+
+
+def gdelt_key(columns: list[str]) -> list[str]:
+    """Primary key of a 15-minute GDELT table: its columns up to and including batch_ts."""
+    return columns[: columns.index("batch_ts") + 1]
 
 
 def _iso(t: datetime) -> str:
