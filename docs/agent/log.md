@@ -130,6 +130,22 @@ flight.** The user asked whether the parameters were optimized and asked for a f
 - **Environment:** the scikit-learn DLL block (Windows application control) must be lifted before
   any backtest.
 
+**2026-10-09 — ADR 0010 done (experiment 0012).** The user chose the follow-up study.
+- **Design:** country foresight with first-firing freshness, 144–906 events per cell.
+- **Result:** 0 of 154 discovered (min p 0.015). 128 of 154 cells meet the no-value rule, and
+  the rest are inconclusive at day leads.
+- **Trials:** 8,163 total, 7,789 counting for DSR.
+- **Environment:**
+  - Windows application control now also blocks `.venv/Scripts/python.exe`.
+  - Workaround: base CPython 3.12 (`uv` install) with `PYTHONPATH=src;.venv/Lib/site-packages`.
+    The job tmp scripts `py.sh` and `et_snap.sh` do this.
+  - The user should allow the venv (and scikit-learn's DLL), or recreate it.
+- **Every research line is now closed:**
+  - daily;
+  - intraday at the fixed configuration;
+  - the intraday search;
+  - foresight for company and country news.
+
 **Open question from the user, answered on 2026-10-06 (see the final report): intraday horizons (hours/minutes).** Not tested.
 Points for the answer: GDELT updates every 15 minutes and `DATEADDED` has 15-minute resolution,
 so hour-scale is the finest meaningful horizon (minutes are below GDELT's own latency and belong
