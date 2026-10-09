@@ -159,3 +159,40 @@ An independent statistics review found two blockers and several gaps. All of the
    - Producer cells use action geography.
 9. **Cell count.** The table lists 14 Track A signals × 2 groups + 3 producer + 3 Track B = 34
    cells (the "13 × 2 + 2" in the text was a typo).
+
+## Implementation notes (2026-10-09, before any search statistic on real data)
+
+**Size check** (amendment 3): 300 synthetic no-signal worlds, with drifting abnormal means,
+time-clustered events and 8 correlated configurations, at 199 draws each.
+- Rejection rate: 4.0% at 5% (MC se 1.3%) and 8.7% at 10%. The size condition (≤ 6%) holds.
+- Script: job tmp `size_check.py`.
+
+**Statistic**
+- **Two-sided cells** (attention, any-tone spike) are searched as 2 × 160 configurations, one per
+  sign s ∈ {+1, −1}, each with the statistic t(s·r − RT). The max runs over both, so the
+  selected configuration also fixes the sign. Both signs are logged as trials (320 per
+  two-sided cell).
+- **The per-config statistic** uses a bincount daily mean and Bartlett NW with 5 lags. A test
+  checks it is identical to `intraday_study.cell_t`.
+- **BH resolution:** with 2,000 draws the smallest p is 1/2001 ≈ 0.0005, below BH's first
+  threshold 0.10/34 ≈ 0.0029.
+
+**Data and windows**
+- **Track B windows that need unpulled batches are invalid.** `orgs_15min` holds 12:00–19:45 UTC
+  only. Missing `_GLOBAL` docs mark a slot as missing, so a window touching an unpulled slot (or
+  its two-batch outage margin) is invalid. Track A uses the all-batch `events_15min_cat`.
+- **Track A activity** is the country's action-geo n_events in the window, also for tone. For
+  `actor_conflict` it is the actor-geo n_events.
+
+**Momentum control**
+- β is fitted only for the selected configuration of a discovered cell, on 200,000 random
+  eligible (asset, day, τ) discovery cells of the track. Event cells are not removed: they are
+  well under 1% of the sample, so this is a negligible deviation from "non-event".
+
+**Environment**
+- **Blocked DLL.** On 2026-10-09 Windows application control started blocking scikit-learn's
+  compiled `murmurhash` module. That breaks the vectorbt/scikit-learn tests (`test_cv`,
+  `test_models`, `test_simulate`, 6 backtest tests in `test_pipelines`).
+- The intraday search and foresight code do not import them. All their tests pass, and so do the
+  rest of the suite (1,013 core/adapter and 194 CLI).
+- Backtests (gates 2–3) need the block lifted first.

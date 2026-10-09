@@ -127,3 +127,37 @@ runs. Everything below is fixed now.
    never computed intraday) decides.
 8. **Not used:** GKG `PAGE_PRECISEPUBTIMESTAMP` (it would separate source publication from
    GDELT ingestion). It sits in an expensive extras column and is often absent.
+
+## Implementation notes (2026-10-09, before any foresight statistic on real data)
+
+**Freshness**
+- The event's own window at τ-slot s covers slots s−5..s−2. A window at s' overlaps it when
+  s' ≥ s − 3.
+- The "previous 24 hours" are therefore the windows at slots (d−1, s−4..95) and (d, 0..s−4) of
+  the trading-day grid. Weekends and holidays are skipped: day d−1 is the previous trading day.
+- A NaN z (no valid baseline) does not make an event stale.
+
+**Prices**
+- **price_at(x)** is the close of the last bar ending at or before x. Before the first bar ends
+  (09:45), it is the previous trading day's last close.
+- Daily leads start at `last_close` of day d − Δ (the forward-filled 15:45 bar close).
+
+**Placebo and exclusion**
+- **Exclusion** (amendment 3): within a draw, an event whose placebo day is within Δ_days + 1
+  trading days of any observed event day of the same asset is dropped from that draw.
+- A draw that ends with fewer than 30 events or days is not valid. p = (1 + exceed) / (1 + valid
+  draws).
+- **BH across 168 cells** needs p ≤ 0.10·k/168. With 2,000 draws the smallest p is 1/2001 ≈ 0.0005,
+  so only near-zero placebo exceedances can be discovered. That is stated as a power limit.
+
+**Reverse study**
+- Shocks are 15-minute abnormal bar returns: close-to-close within the day, minus the hedge's.
+- The shock's time is the end of its bar (bar k ends at τ_k). The response is the category's
+  firing rate over usable (finite-z) window slots in the next 24 hours.
+- A shock counts only if the category did not fire in the 24 hours up to it.
+
+**Bookkeeping**
+- The `mean_signed` field is the mean of the already-signed value. A sign bug found by the
+  synthetic test was fixed before any real run.
+- All O and R trials carry `params.lookahead = true`. `counts_for_dsr` excludes them from DSR's
+  N, with a test.
