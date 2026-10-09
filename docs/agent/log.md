@@ -115,6 +115,21 @@ flight.** The user asked whether the parameters were optimized and asked for a f
 - **Environment:** Windows application control blocks scikit-learn's `murmurhash` DLL
   (vectorbt/sklearn tests fail). The user must allow it before any backtest.
 
+**2026-10-09 — ADR 0008 and 0009 done.**
+- **ADR 0008 (experiment 0010): null.** 0 of 34 cells discovered and 5,920 trials. No
+  configuration beats costs: the best net t is negative in every cell.
+- **ADR 0009 (experiment 0011):** 220 look-ahead trials.
+  - Positive company spikes: a pre-news drift in discovery that fails confirmation.
+  - Country categories: inconclusive. The freshness rule left ≤ 33 events per cell.
+  - Reverse study: only DM protests follow price shocks.
+- **Trials:** 8,009 in the store, 7,789 counting for DSR. Spend ≈ $5.25 of the $20 cap.
+- **Open, for the user to decide:**
+  - a new pre-registered foresight study for country categories with a looser freshness rule;
+  - closing the project;
+  - another data source.
+- **Environment:** the scikit-learn DLL block (Windows application control) must be lifted before
+  any backtest.
+
 **Open question from the user, answered on 2026-10-06 (see the final report): intraday horizons (hours/minutes).** Not tested.
 Points for the answer: GDELT updates every 15 minutes and `DATEADDED` has 15-minute resolution,
 so hour-scale is the finest meaningful horizon (minutes are below GDELT's own latency and belong
