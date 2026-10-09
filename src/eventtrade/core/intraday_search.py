@@ -316,6 +316,7 @@ def max_t_search(
     direction: int,
     n_boot: int,
     seed: int,
+    progress: Callable[[int, int], None] | None = None,
 ) -> SearchResult:
     """Same result as `max_t_search_reference` (tested), computed per config from a value table.
 
@@ -341,7 +342,9 @@ def max_t_search(
     col = np.full(n_days, -1, dtype=np.int64)
     col[pool] = np.arange(len(pool))
     tmax = np.full(n_boot, -math.inf)
-    for k in suff:
+    for n_done, k in enumerate(suff):
+        if progress is not None:
+            progress(n_done, len(suff))  # timing only: no statistic is passed out
         d0, a, j = arrays[k]
         if (col[d0] < 0).any():
             raise ValueError(f"config {k}: event days outside the placebo pool")

@@ -92,6 +92,29 @@ Alpaca.**
 - **Spend.** October billed 1,883 GB, ≈ $4.5 cumulative of the $20 cap.
 - **No further trial-logging runs** without a new ADR and the user's direction.
 
+**2026-10-09 — ADR 0008 (intraday parameter search) and ADR 0009 (value of foresight) in
+flight.** The user asked whether the parameters were optimized and asked for a foresight study
+("if we knew events earlier").
+
+- **Plans:** both ADRs were written, reviewed (3 blockers, all fixed by amendment) and given
+  implementation notes before any real statistic.
+- **Data:** `events_15min_cat` pulled, 11 chunks, 31M rows, 139 GB. October billed ≈ 2,022 GB,
+  ≈ $5.25 cumulative of the $20 cap.
+- **Code:**
+  - `core/intraday_search.py`, `core/foresight.py`, `cli/pipelines_intraday_search.py`,
+    `cli/pipelines_foresight.py`;
+  - commands `intraday-search` and `foresight` (both once-only, logging at the end);
+  - the size check gives 4.0% rejections at 5%;
+  - placebo loops use value tables, tested equal to the reference loops.
+- **Runs:**
+  - The first search run took > 30 min per cell. It was stopped before logging anything (no J
+    trials), and the orphaned python process was killed by PID.
+  - Rerun from frozen commit `2ef1f90`, log `intraday_search.log`.
+  - Then run `foresight` (same checkout), then write experiments 0010 (search) and 0011
+    (foresight).
+- **Environment:** Windows application control blocks scikit-learn's `murmurhash` DLL
+  (vectorbt/sklearn tests fail). The user must allow it before any backtest.
+
 **Open question from the user, answered on 2026-10-06 (see the final report): intraday horizons (hours/minutes).** Not tested.
 Points for the answer: GDELT updates every 15 minutes and `DATEADDED` has 15-minute resolution,
 so hour-scale is the finest meaningful horizon (minutes are below GDELT's own latency and belong

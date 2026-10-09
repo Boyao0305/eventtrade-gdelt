@@ -195,8 +195,13 @@ def intraday_search(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo
     configs = se.grid()
     disc: dict[str, se.SearchResult] = {}
     for c in specs:
+        echo(f"  {c.key}: preparing configs [{_time.time() - t0:.0f}s]")
         evs, fn = _config_events(c, configs, events[c.key], disc_mask, panel, rt)
-        disc[c.key] = se.max_t_search(evs, fn, years, pool_d, 1, n_boot, cfg.seed)
+        def tick(i: int, n: int, key: str = c.key) -> None:
+            if i % 32 == 0:
+                echo(f"    {key} sufficient config {i}/{n} [{_time.time() - t0:.0f}s]")
+
+        disc[c.key] = se.max_t_search(evs, fn, years, pool_d, 1, n_boot, cfg.seed, tick)
         r = disc[c.key]
         echo(f"  {c.key:<34} best {r.best} t {_fmt(r.best_stat)} p {_fmt(r.p, 4)}"
              f" [{_time.time() - t0:.0f}s]")
