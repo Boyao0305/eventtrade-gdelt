@@ -138,3 +138,16 @@ def test_fast_cell_equals_reference():
         rm, rt = st.cell_t(ref)
         assert nd == len(ref) and ne == int(ok.sum())
         assert mean == pytest.approx(rm) and t == pytest.approx(rt, rel=1e-9)
+
+
+
+def test_table_max_t_equals_reference():
+    for seed, effect in ((0, 0.0), (5, 0.004), (11, 0.0)):
+        ev, at, years, pool = _world(effect, seed)
+        a = se.max_t_search(ev, at, years, pool, 1, 59, seed)
+        b = se.max_t_search_reference(ev, at, years, pool, 1, 59, seed)
+        assert a.best == b.best and a.n_valid_draws == b.n_valid_draws
+        assert a.p == pytest.approx(b.p) and a.best_stat == pytest.approx(b.best_stat)
+        two = se.max_t_search(ev, at, years, pool, 0, 59, seed)
+        two_ref = se.max_t_search_reference(ev, at, years, pool, 0, 59, seed)
+        assert two.p == pytest.approx(two_ref.p)

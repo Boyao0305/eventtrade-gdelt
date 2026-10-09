@@ -232,7 +232,7 @@ def block_placebo(rng: np.random.Generator, pool: np.ndarray, block: int = st.PL
     return out
 
 
-def max_t_search(
+def max_t_search_reference(
     events: dict[str, pd.DataFrame],
     outcome_at: Callable[[str, np.ndarray, np.ndarray, np.ndarray], np.ndarray],
     years: np.ndarray,
@@ -283,6 +283,78 @@ def max_t_search(
             valid += 1
             exceed += m >= obs
     return SearchResult(stats, best, obs, (1 + exceed) / (1 + valid), valid)
+
+
+def placebo_maps(rng: np.random.Generator, pool: np.ndarray, n_days: int, n_boot: int
+                 ) -> np.ndarray:
+    """[n_boot, n_days] day mappings (-1 off the pool), drawn in the same order as the reference
+    loop (one `block_placebo` per draw from the same generator)."""
+    maps = np.full((n_boot, n_days), -1, dtype=np.int64)
+    for b in range(n_boot):
+        maps[b, pool] = block_placebo(rng, pool)
+    return maps
+
+
+def value_table(k: str, a: np.ndarray, j: np.ndarray, pool: np.ndarray,
+                outcome_at: Callable[[str, np.ndarray, np.ndarray, np.ndarray], np.ndarray]
+                ) -> tuple[np.ndarray, np.ndarray]:
+    """(V [combos, len(pool)], inverse): the outcome of every distinct (asset, tau) of the events
+    on every pool day, so a placebo draw is a gather instead of a fresh price computation."""
+    combo, inv = np.unique(np.stack([a, j], axis=1), axis=0, return_inverse=True)
+    c_n, p_n = len(combo), len(pool)
+    cc = np.repeat(np.arange(c_n), p_n)
+    dd = np.tile(pool, c_n)
+    v = outcome_at(k, dd, combo[cc, 0], combo[cc, 1]).reshape(c_n, p_n)
+    return v, np.asarray(inv).reshape(-1)
+
+
+def max_t_search(
+    events: dict[str, pd.DataFrame],
+    outcome_at: Callable[[str, np.ndarray, np.ndarray, np.ndarray], np.ndarray],
+    years: np.ndarray,
+    pool: np.ndarray,
+    direction: int,
+    n_boot: int,
+    seed: int,
+) -> SearchResult:
+    """Same result as `max_t_search_reference` (tested), computed per config from a value table.
+
+    Requires every event day to be a pool day (events are restricted to the period's decision
+    days, which form the pool)."""
+    pool = np.asarray(pool, dtype=int)
+    n_days = int(max([int(pool.max()) if len(pool) else 0]
+                     + [int(e["day"].max()) for e in events.values() if len(e)])) + 1
+    arrays = {k: (ev["day"].to_numpy(int), ev["asset"].to_numpy(int), ev["j"].to_numpy(int))
+              for k, ev in events.items()}
+    stats: dict[str, tuple[float, float, int, int]] = {}
+    suff: list[str] = []
+    for k, (d, a, j) in arrays.items():
+        mean, t, ne, nd = fast_cell(d, outcome_at(k, d, a, j), n_days)
+        stats[k] = (mean, t, ne, nd)
+        if st.sufficient(ne, nd) and math.isfinite(t):
+            suff.append(k)
+    if not suff:
+        return SearchResult(stats, None, float("nan"), float("nan"), 0)
+    best = max(suff, key=lambda k: _stat(stats[k][1], direction))
+    obs = _stat(stats[best][1], direction)
+    maps = placebo_maps(np.random.default_rng(seed), pool, n_days, n_boot)
+    col = np.full(n_days, -1, dtype=np.int64)
+    col[pool] = np.arange(len(pool))
+    tmax = np.full(n_boot, -math.inf)
+    for k in suff:
+        d0, a, j = arrays[k]
+        if (col[d0] < 0).any():
+            raise ValueError(f"config {k}: event days outside the placebo pool")
+        table, inv = value_table(k, a, j, pool, outcome_at)
+        for b in range(n_boot):
+            dp = maps[b, d0]
+            _, t, ne, nd = fast_cell(dp, table[inv, col[dp]], n_days)
+            if st.sufficient(ne, nd) and math.isfinite(t):
+                tmax[b] = max(tmax[b], _stat(t, direction))
+    valid = np.isfinite(tmax)
+    exceed = int((tmax[valid] >= obs).sum())
+    return SearchResult(stats, best, obs, (1 + exceed) / (1 + int(valid.sum())),
+                        int(valid.sum()))
 
 
 def configs_by_trigger(configs: Sequence[Config]) -> dict[tuple[int, int, float], list[Config]]:

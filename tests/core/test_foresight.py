@@ -81,3 +81,13 @@ def test_response_rate_wraps_to_next_day():
     usable[:, :48] = False
     rate2 = fs.response_rate(fire, usable, np.array([0]), np.array([50]))
     assert rate2[0] == pytest.approx(1 / (45 + 3))  # day0 51..95 + day1 48..50
+
+
+
+def test_table_foresight_equals_reference():
+    for seed, effect, excl in ((0, 0.0, 1), (3, 0.005, 2), (8, 0.0, 6)):
+        d, a, at, pool = _null_world(seed, effect)
+        j = np.zeros(len(d), int)
+        x = fs.foresight_test(d, a, at, j, pool, 1, excl, 59, seed)
+        y = fs.foresight_test_reference(d, a, at, j, pool, 1, excl, 59, seed)
+        assert x.n_valid_draws == y.n_valid_draws and x.p == pytest.approx(y.p, nan_ok=True)

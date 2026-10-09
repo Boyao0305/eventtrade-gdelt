@@ -52,7 +52,7 @@ class ForesightResult:
     n_valid_draws: int
 
 
-def foresight_test(
+def foresight_test_reference(
     d: np.ndarray, a: np.ndarray, value_at: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
     j: np.ndarray, pool: np.ndarray, direction: int, exclusion: int, n_boot: int, seed: int,
 ) -> ForesightResult:
@@ -99,6 +99,53 @@ def foresight_test(
             continue
         vv = value_at(dp[keep], a[keep], j[keep])
         _, tp, ne_p, nd_p = se.fast_cell(dp[keep], vv, n_days)
+        if st.sufficient(ne_p, nd_p) and math.isfinite(tp):
+            valid += 1
+            exceed += stat(tp) >= obs
+    return ForesightResult(mean, t, (1 + exceed) / (1 + valid) if valid else float("nan"),
+                           ne, nd, valid)
+
+
+def foresight_test(
+    d: np.ndarray, a: np.ndarray, value_at: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
+    j: np.ndarray, pool: np.ndarray, direction: int, exclusion: int, n_boot: int, seed: int,
+) -> ForesightResult:
+    """Same result as `foresight_test_reference` (tested): value table over (asset, j) x pool
+    days and a precomputed same-asset exclusion mask, one gather per draw."""
+    d = np.asarray(d, dtype=int)
+    a = np.asarray(a, dtype=int)
+    j = np.asarray(j, dtype=int)
+    pool = np.asarray(pool, dtype=int)
+    n_days = int(max(pool.max(initial=0), d.max(initial=0))) + 1
+    v = value_at(d, a, j)
+    mean, t, ne, nd = se.fast_cell(d, v, n_days)
+
+    def stat(x: float) -> float:
+        return abs(x) if direction == 0 else direction * x
+
+    if not st.sufficient(ne, nd) or not math.isfinite(t):
+        return ForesightResult(mean, t, float("nan"), ne, nd, 0)
+    obs = stat(t)
+    col = np.full(n_days, -1, dtype=np.int64)
+    col[pool] = np.arange(len(pool))
+    if (col[d] < 0).any():
+        raise ValueError("event days outside the placebo pool")
+    table, inv = se.value_table("", a, j, pool, lambda _k, dd, aa, jj: value_at(dd, aa, jj))
+    assets, a_idx = np.unique(a, return_inverse=True)
+    near = np.zeros((len(assets), n_days), dtype=bool)  # within `exclusion` of an own event day
+    for i in range(len(assets)):
+        own = np.unique(d[a_idx == i])
+        for off in range(-exclusion, exclusion + 1):
+            x = own + off
+            near[i, x[(x >= 0) & (x < n_days)]] = True
+    maps = se.placebo_maps(np.random.default_rng(seed), pool, n_days, n_boot)
+    exceed = valid = 0
+    for b in range(n_boot):
+        dp = maps[b, d]
+        keep = (dp >= 0) & ~near[a_idx, np.maximum(dp, 0)]
+        if not keep.any():
+            continue
+        _, tp, ne_p, nd_p = se.fast_cell(dp[keep], table[inv[keep], col[dp[keep]]], n_days)
         if st.sufficient(ne_p, nd_p) and math.isfinite(tp):
             valid += 1
             exceed += stat(tp) >= obs
