@@ -82,6 +82,16 @@ Alpaca.**
   would change the β sample and the liquidity filter set; decide and document before any
   outcome.
 
+**2026-10-09 — ADR 0007 done: null (experiment 0009).**
+- **Price pull.** The background job was reaped under memory pressure. The user then ran
+  `ingest-intraday`; it reported 0 left, all 961 × 2016–2025 ticker-years stored (53.9M bars).
+- **Logging change.** Before the run, `intraday-study` was changed to log all trials only after
+  everything is computed (commit `479543f`, which is also the frozen checkout).
+- **Result.** One run: 0 of 18 cells discovered, all means within ±2.3 bp. 18 trials; store
+  total 1,869.
+- **Spend.** October billed 1,883 GB, ≈ $4.5 cumulative of the $20 cap.
+- **No further trial-logging runs** without a new ADR and the user's direction.
+
 **Open question from the user, answered on 2026-10-06 (see the final report): intraday horizons (hours/minutes).** Not tested.
 Points for the answer: GDELT updates every 15 minutes and `DATEADDED` has 15-minute resolution,
 so hour-scale is the finest meaningful horizon (minutes are below GDELT's own latency and belong
