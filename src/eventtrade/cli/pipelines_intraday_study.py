@@ -177,12 +177,13 @@ def intraday_study(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo 
         disc_res[c.key], disc_note[c.key] = res, note
     pvals = {k: (r.p if math.isfinite(r.p) else float("nan")) for k, r in disc_res.items()}
     discovered = benjamini_hochberg(pvals, BH_Q)
-    logged = {t.trial_id for t in store.read_trials()}
+    # Trials are logged only after everything is computed: a run killed part-way logs nothing
+    # and can simply be run again (the once-only guard looks at logged trials).
+    pending: list[tuple[CellSpec, str, tuple[date, date], dict[str, Any]]] = []
     for c in specs:
         note = {**disc_note[c.key], "discovered": c.key in discovered, "bh_q": BH_Q,
                 "n_cells": len(specs), "liquidity_excluded": excluded, "adr": "0007"}
-        _log_trial(store, logged, c.track, "signal", c.hyp, _params(c, "discovery", n_boot,
-                   cfg.seed), *discovery, now, note)
+        pending.append((c, "discovery", discovery, note))
     echo(f"discovery {discovery[0]}..{discovery[1]}: {len(discovered)} of {len(specs)} cells"
          f" discovered (BH q = {BH_Q})")
     _report(echo, specs, disc_res, disc_note, discovered)
@@ -190,6 +191,7 @@ def intraday_study(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo 
     # --- confirmation --------------------------------------------------------------------------
     if not discovered:
         echo("no cell discovered: the study stops here (ADR 0007)")
+        _log_all(store, pending, n_boot, cfg.seed, now, echo)
         return OK
     betas = _momentum_betas(panel, index, liquid, events, disc_mask & decision, cfg.seed)
     conf: dict[str, tuple[st.PlaceboResult, dict[str, Any]]] = {}
@@ -215,11 +217,21 @@ def intraday_study(cfg: Config, store: Any, istore: Any, now: Clock, echo: Echo 
               and note["resid_mean"] is not None and s * note["resid_mean"] > 0)
         note |= {"holm": c.key in holm_pass, "verdict": "CONFIRMED" if ok else "not confirmed",
                  "holm_alpha": HOLM_ALPHA, "adr": "0007"}
-        _log_trial(store, logged, c.track, "signal", c.hyp, _params(c, "confirmation", n_boot,
-                   cfg.seed), *confirmation, now, note)
+        pending.append((c, "confirmation", confirmation, note))
         echo(f"  confirmation {c.key}: mean {res.mean:.5f} t {res.t:.2f} p {res.p:.4f}"
              f" net {note['net']} resid {note['resid_mean']} -> {note['verdict']}")
+    _log_all(store, pending, n_boot, cfg.seed, now, echo)
     return OK
+
+
+def _log_all(store: Any, pending: list[tuple[CellSpec, str, tuple[date, date], dict[str, Any]]],
+             n_boot: int, seed: int, now: Clock, echo: Echo) -> None:
+    logged = {t.trial_id for t in store.read_trials()}
+    n0 = len(logged)
+    for c, period, span, note in pending:
+        _log_trial(store, logged, c.track, "signal", c.hyp, _params(c, period, n_boot, seed),
+                   *span, now, note)
+    echo(f"{len(logged) - n0} trial(s) logged")
 
 
 def study_calendar(cfg: Config, store: Any, istore: Any, first_decision: date
