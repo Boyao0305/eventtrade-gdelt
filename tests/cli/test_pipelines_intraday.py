@@ -302,3 +302,17 @@ def test_15min_events_cat_refuses_without_a_complete_mapping(tmp_path):
     assert _run15(tmp_path, g, "events_cat", end=date(2025, 4, 1), cameo=CAMEO) == pi.REFUSED
     assert _run15(tmp_path, g, "events_cat", store=_GStore([]), cameo=CAMEO) == pi.MISSING
     assert g.estimates == [] and g.pulls == []
+
+
+
+def test_lookahead_and_holdout_trials_do_not_count_for_dsr():
+    from eventtrade.cli.pipelines import counts_for_dsr
+    from eventtrade.schemas import Trial
+
+    def tr(stage, params):
+        return Trial(trial_id="x", created_at=NOW, track="A", stage=stage, hypothesis="O1",
+                     params=params, data_start=date(2016, 1, 4), data_end=date(2019, 12, 31))
+
+    assert counts_for_dsr(tr("signal", {}))
+    assert not counts_for_dsr(tr("signal", {"lookahead": True}))
+    assert not counts_for_dsr(tr("holdout", {}))

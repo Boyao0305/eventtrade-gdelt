@@ -1880,6 +1880,12 @@ def _weights(scores: pd.DataFrame, prices: pd.DataFrame, rebalance: int) -> pd.D
 
 # --- overfitting (gate 3) ---------------------------------------------------------------------
 
+def counts_for_dsr(t: Trial) -> bool:
+    """A trial counts in DSR's N unless it is a hold-out evaluation or a deliberate look-ahead
+    diagnostic (ADR 0009 amendment 6: `params.lookahead`), which can never be backtested."""
+    return t.stage != "holdout" and not t.params.get("lookahead", False)
+
+
 def overfit_report(cfg: Config, store: Store, track: Track, echo: Echo = print) -> int:
     """DSR deflated over every logged dev trial of a track (all stages), PBO and bootstrap CI.
 
@@ -1892,7 +1898,7 @@ def overfit_report(cfg: Config, store: Store, track: Track, echo: Echo = print) 
     if not trials:
         echo(f"no backtest trials for track {track}")
         return MISSING
-    n_all = sum(1 for t in store.read_trials(track) if t.stage != "holdout")
+    n_all = sum(1 for t in store.read_trials(track) if counts_for_dsr(t))
     wide = store.read_trial_returns([t.trial_id for t in trials])
     rep = overfit.overfit_report(wide, cfg.seed, n_trials=max(n_all, wide.shape[1]))
     passed = rep.deflated_sharpe >= 0.95 and rep.pbo is not None and rep.pbo < 0.5
