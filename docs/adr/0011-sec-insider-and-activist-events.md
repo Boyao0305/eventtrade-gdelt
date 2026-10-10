@@ -143,3 +143,41 @@ An independent review found three blockers and eight should-fix items. All of th
 10. **13D hits** are deduplicated by accession, and only dates before 2025-04-01 are queried.
     The February 2024 change of the 13D deadline (from 10 days to 5 business days) is reported
     as a split of the confirmation window, not a test.
+
+## Implementation notes (2026-10-10, before any outcome was computed)
+
+**Data**
+- 314,500 purchase transactions and 52,310 13D-family filings were pulled (2015-10 → 2025-03).
+- All 900 Track B tickers map to a CIK.
+- 143,817 company filings are stored (10-Q/10-K/8-K/DEFM14A).
+- The 576 initial 13Ds touching a universe CIK all had a header subject, and it always equalled
+  the first listed CIK. 275 have a universe subject; in the other 301 a universe company is the
+  filer.
+
+**Holding-company CIK changes (limitation)**
+- `company_tickers.json` maps today's ticker to today's CIK. Firms that reorganized under a new
+  holding-company CIK (e.g. DIS 2019, CI, AVGO, LIN, FOXA, IR, and XOM/PNFP in 2025) lose
+  filings made under the predecessor CIK.
+- The effect: fewer insider and 13D events, and an earnings-proximity stratum of "none", for
+  those stocks. Placebo strata are built the same way, so no bias toward either result.
+- Matching by ticker symbol was rejected, because symbols are reused (pre-2020 IR = Trane).
+
+**13D audit** (amendment 3; `sec-audit`, seed `config.seed`, names only, no prices)
+- 109 of the 275 universe-subject initial 13Ds are flagged deal-related and dropped. The flagged
+  ones look right (Rockwell/PTC, Vale/Mosaic, SoftBank/T-Mobile, Novartis/Arrowhead), with one
+  false positive (Marathon at e.l.f.).
+- Of the 50 sampled filings, about half of the unflagged ones are activists (Starboard, Sachem
+  Head, Mantle Ridge, Marcato, Impactive, Eminence, Corvex, Bulldog). The rest are founders and
+  family holders, private-equity sponsors and strategic stakes.
+- `act_13d` therefore measures "initial non-deal 13D", about 50% activist. The cell is kept as
+  registered; no hand-made activist filter is added.
+
+**Event counts** (full period, before price-availability and period filters): ins_all 4,600,
+ins_cxo 1,207, ins_cluster 504, act_13d 145.
+
+**Placebo and splice**
+- The matched placebo draws placebo dates with replacement within each (stock, stratum) pool.
+- The XLC hedge before 2018-06-19 is spliced from SPY, ratio-scaled at XLC's first price.
+
+**Environment:** scripts run with base CPython 3.12 and the venv's site-packages, because
+Windows application control blocks the venv launcher.

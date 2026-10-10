@@ -97,6 +97,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                                lambda y, q: sec.insider_quarter(client, y, q),
                                lambda a, b: sec.filings_13d(client, a, b),
                                lambda: sec.company_tickers(client), now)
+    if cmd in ("sec-audit", "sec-study"):
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_sec_study as pss
+
+        sst = SecStore(cfg.sec_db_path)
+        if cmd == "sec-audit":
+            return pss.sec_audit(cfg, store, sst)
+        return pss.sec_study(cfg, store, sst, now)  # n_boot fixed at 2,000
+    if cmd == "ingest-sec-extra":
+        from eventtrade.adapters import sec
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_sec as psec
+
+        client = sec.SecClient(cfg.sec_user_agent)
+        return psec.ingest_sec_extra(cfg, SecStore(cfg.sec_db_path), store,
+                                     lambda cik: sec.company_submissions(client, cik),
+                                     lambda ciks, adsh: sec.filing_subject(client, ciks, adsh),
+                                     now)
     if cmd == "foresight-country":
         from eventtrade.cli import pipelines_foresight as pfo
 
@@ -196,6 +214,11 @@ def _parser() -> argparse.ArgumentParser:
                                      " study, look-ahead diagnostic, once only (O/R trials)")
     sub.add_parser("ingest-sec", help="ADR 0011: SEC insider purchases (quarterly data sets) and"
                                       " 13D filings into data/sec.sqlite; resumable")
+    sub.add_parser("sec-audit", help="ADR 0011: print 50 random 13D events (names, deal flag);"
+                                     " reads no prices")
+    sub.add_parser("sec-study", help="ADR 0011: SEC insider/13D event study, once only (S1)")
+    sub.add_parser("ingest-sec-extra", help="ADR 0011 amendments 2-3: EDGAR submissions of Track B"
+                                            " companies and initial-13D subject CIKs; resumable")
     sub.add_parser("foresight-country", help="ADR 0010: foresight for country categories with"
                                              " first-firing freshness, once only (O2 trials)")
     sub.add_parser("intraday-search", help="ADR 0008: intraday parameter search, 34 cells x 160"
