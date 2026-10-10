@@ -208,7 +208,10 @@ def strata(adj_close: pd.DataFrame, hedge_close: Mapping[str, pd.Series],
                                         side="left"))
         idx = np.arange(len(cal))
         k = np.searchsorted(fpos, idx, side="right") - 1
-        since = np.where(k >= 0, idx - fpos[np.maximum(k, 0)], -1)
+        if fpos.size:
+            since = np.where(k >= 0, idx - fpos[np.maximum(k, 0)], -1)
+        else:  # no 10-Q/10-K on record (e.g. foreign or bank-regulator filers): stratum 'none'
+            since = np.full(len(cal), -1)
         prox = np.select([since < 0, since <= 10, since <= 30], ["none", "0-10", "11-30"], "31+")
         r = rel.to_numpy()
         pm = period_mask & np.isfinite(r)

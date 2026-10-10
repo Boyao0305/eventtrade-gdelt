@@ -138,3 +138,12 @@ def test_matched_placebo_calibration_and_power():
     ev, oc, st, cal = _world(0.02, 3)
     r = se.matched_placebo(ev, oc, st, 5, 1, cal, 99, 1)
     assert r.p <= 0.03 and r.mean > 0.01 and r.n_matched == r.n_events
+
+
+
+def test_strata_without_periodic_filings_is_none():
+    cal = pd.bdate_range("2016-01-04", periods=60)
+    cl = pd.DataFrame({"AAA": np.linspace(10, 12, 60)}, index=cal)
+    hc = {"AAA": pd.Series(np.linspace(5, 5.5, 60), index=cal)}
+    st = se.strata(cl, hc, {}, cal, np.ones(60, dtype=bool))
+    assert len(st) == 40 and st["stratum"].str.startswith("none|").all()
