@@ -87,6 +87,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         from eventtrade.cli import pipelines_foresight as pfo
 
         return pfo.foresight(cfg, store, _istore(cfg), now)  # n_boot fixed at 2,000
+    if cmd == "ingest-sec":
+        from eventtrade.adapters import sec
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_sec as psec
+
+        client = sec.SecClient(cfg.sec_user_agent)
+        return psec.ingest_sec(cfg, SecStore(cfg.sec_db_path),
+                               lambda y, q: sec.insider_quarter(client, y, q),
+                               lambda a, b: sec.filings_13d(client, a, b),
+                               lambda: sec.company_tickers(client), now)
     if cmd == "foresight-country":
         from eventtrade.cli import pipelines_foresight as pfo
 
@@ -184,6 +194,8 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("intraday-status", help="row counts of data/intraday.sqlite")
     sub.add_parser("foresight", help="ADR 0009: value-of-foresight profile and reverse event"
                                      " study, look-ahead diagnostic, once only (O/R trials)")
+    sub.add_parser("ingest-sec", help="ADR 0011: SEC insider purchases (quarterly data sets) and"
+                                      " 13D filings into data/sec.sqlite; resumable")
     sub.add_parser("foresight-country", help="ADR 0010: foresight for country categories with"
                                              " first-firing freshness, once only (O2 trials)")
     sub.add_parser("intraday-search", help="ADR 0008: intraday parameter search, 34 cells x 160"

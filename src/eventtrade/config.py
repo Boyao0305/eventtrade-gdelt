@@ -46,6 +46,14 @@ class Config(BaseModel):
         return self.home / "data" / "intraday.sqlite"
 
     @property
+    def sec_db_path(self) -> Path:
+        """ADR 0011: SEC filings store."""
+        return self.home / "data" / "sec.sqlite"
+
+    # SEC requires a User-Agent with a contact (the user's email, approved 2026-10-10).
+    sec_user_agent: str = "eventtrade research boyao0305@gmail.com"
+
+    @property
     def alpaca_env_path(self) -> Path:
         return self.home / "secrets" / "alpaca.env"
 
