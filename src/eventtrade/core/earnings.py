@@ -18,11 +18,18 @@ PLACEBO_EXCLUDE = 5
 
 
 def earnings_days(company_filings: pd.DataFrame, cik_ticker: Mapping[str, str],
-                  cal: pd.DatetimeIndex) -> pd.DataFrame:
-    """[ticker, d]: first trading day on/after each 8-K (not 8-K/A) with Item 2.02; filings of a
-    ticker within 5 trading days of the previous kept one are merged into it."""
+                  cal: pd.DatetimeIndex, dedup: bool = True, deal_filter: bool = True
+                  ) -> pd.DataFrame:
+    """[ticker, d]: first trading day on/after each 8-K (not 8-K/A) with Item 2.02.
+
+    dedup: filings of a ticker within 5 trading days of the previous kept one are merged into it.
+    deal_filter: 2.02 8-Ks that also carry Item 1.01 or 2.01 are dropped (ADR 0013 am. 6)."""
     f = company_filings[company_filings["form"] == "8-K"].copy()
-    f = f[f["items"].fillna("").astype(str).str.contains(r"\b2\.02\b")]
+    items = f["items"].fillna("").astype(str)
+    f = f[items.str.contains(r"\b2\.02\b")]
+    if deal_filter:
+        it = f["items"].fillna("").astype(str)
+        f = f[~it.str.contains(r"\b(?:1\.01|2\.01)\b")]
     f["ticker"] = f["cik"].astype(str).str.zfill(10).map(cik_ticker)
     f = f.dropna(subset=["ticker"])
     pos = cal.searchsorted(pd.to_datetime(f["filing_date"]).to_numpy(), side="left")
@@ -31,34 +38,73 @@ def earnings_days(company_filings: pd.DataFrame, cik_ticker: Mapping[str, str],
     for tk, g in f.sort_values("p").groupby("ticker"):
         last = -10**9
         for p in g["p"]:
-            if p - last > DEDUP_DAYS:
+            if not dedup or p - last > DEDUP_DAYS:
                 rows.append((tk, int(p)))
                 last = p
     return pd.DataFrame([(t, cal[p]) for t, p in rows], columns=["ticker", "d"])
 
 
-def hedged_3day(close: pd.DataFrame, hedge_close: Mapping[str, pd.Series]) -> pd.DataFrame:
-    """R3[t] = close(t+1)/close(t-1) - 1 minus the hedge's: the 3-day window centred on t."""
+def hedged_3day(close: pd.DataFrame, hedge_close: Mapping[str, pd.Series], back: int = 1
+                ) -> pd.DataFrame:
+    """R[t] = close(t+1)/close(t-back) - 1 minus the hedge's (back=1: 3-day window centred on t;
+    back=2: the 4-day window of ADR 0013 amendment 2)."""
     out = {}
     for tk in close.columns:
         h = hedge_close[tk]
-        out[tk] = (close[tk].shift(-1) / close[tk].shift(1) - 1) - (h.shift(-1) / h.shift(1) - 1)
+        out[tk] = ((close[tk].shift(-1) / close[tk].shift(back) - 1)
+                   - (h.shift(-1) / h.shift(back) - 1))
     return pd.DataFrame(out, index=close.index)
 
 
-def surprise_z(r3: pd.DataFrame, earn: pd.DataFrame) -> pd.DataFrame:
+def pre_reaction_share(close: pd.DataFrame, hedge_close: Mapping[str, pd.Series],
+                       earn: pd.DataFrame) -> pd.Series:
+    """Per year: share of earnings days whose largest |1-day hedged return| in [d-4, d+1] falls
+    before d (ADR 0013 amendment 2; outcome-free)."""
+    cal = close.index
+    rows = []
+    for tk, g in earn.groupby("ticker"):
+        if tk not in close.columns:
+            continue
+        h = hedge_close[tk]
+        r1 = ((close[tk] / close[tk].shift(1) - 1) - (h / h.shift(1) - 1)).to_numpy()
+        for d, p in zip(g["d"], cal.get_indexer(g["d"]), strict=True):
+            if p < 5 or p + 1 >= len(cal):
+                continue
+            w = r1[p - 4:p + 2]
+            if np.isfinite(w).sum() < 4:
+                continue
+            k = int(np.nanargmax(np.abs(w)))
+            rows.append((d.year, k < 4))
+    df = pd.DataFrame(rows, columns=["year", "before"])
+    return df.groupby("year")["before"].mean()
+
+
+def coverage_ok(earn_all: pd.DataFrame, years: range) -> set[str]:
+    """Tickers with >= 3 Item 2.02 days in every listed calendar year (ADR 0013 amendment 3)."""
+    e = earn_all.assign(year=pd.to_datetime(earn_all["d"]).dt.year)
+    cnt = e.groupby(["ticker", "year"]).size().unstack(fill_value=0)
+    cnt = cnt.reindex(columns=list(years), fill_value=0)
+    return set(cnt.index[(cnt >= 3).all(axis=1)])
+
+
+def surprise_z(r3: pd.DataFrame, earn: pd.DataFrame, exclude: pd.DataFrame | None = None
+               ) -> pd.DataFrame:
     """[ticker, d, r, z]: reaction r = R3[d]; z = r / sd of R3 over the 250 trading days ending at
     d-2 (window ends at d-1 close: known before d), excluding days within +-2 of an earnings day;
     needs >= 150 values."""
     cal = r3.index
     rows = []
+    excl = earn if exclude is None else exclude
+    ex_by = {tk: cal.get_indexer(g["d"]) for tk, g in excl.groupby("ticker")}
     for tk, g in earn.groupby("ticker"):
         if tk not in r3.columns:
             continue
         x = r3[tk].to_numpy(dtype=float).copy()
         epos = cal.get_indexer(g["d"])
         mask = np.zeros(len(cal), dtype=bool)
-        for p in epos[epos >= 0]:
+        for p in ex_by.get(tk, epos):
+            if p < 0:
+                continue
             mask[max(0, p - SIGMA_EXCLUDE):p + SIGMA_EXCLUDE + 1] = True
         xs = np.where(mask, np.nan, x)
         for d, p in zip(g["d"], epos, strict=True):
@@ -84,7 +130,8 @@ def events(sz: pd.DataFrame, cal: pd.DatetimeIndex) -> dict[str, pd.DataFrame]:
     return out
 
 
-def bigmove_strata(r3: pd.DataFrame, earn: pd.DataFrame, period_mask: np.ndarray) -> pd.DataFrame:
+def bigmove_strata(r3: pd.DataFrame, earn: pd.DataFrame, period_mask: np.ndarray,
+                   decluster: int = 10, before: int = 5, after: int = 20) -> pd.DataFrame:
     """Secondary null: [date, ticker, stratum] for non-earnings days whose 3-day hedged move has
     |z| >= 2 against the stock's trailing 250-day sd (same estimator); stratum 'pos' / 'neg'.
     `date` is the decision day t = (centre day)+1, as for events. Days within +-5 trading days of
@@ -97,12 +144,18 @@ def bigmove_strata(r3: pd.DataFrame, earn: pd.DataFrame, period_mask: np.ndarray
         excl = np.zeros(len(cal), dtype=bool)
         for p in epos_by.get(tk, np.array([], dtype=int)):
             if p >= 0:
-                excl[max(0, p - PLACEBO_EXCLUDE):p + PLACEBO_EXCLUDE + 1] = True
+                excl[max(0, p - before):p + after + 1] = True
         s = pd.Series(np.where(excl, np.nan, x))
         sd = s.shift(2).rolling(SIGMA_DAYS, min_periods=SIGMA_MIN).std().to_numpy()
         z = x / sd
         big = np.isfinite(z) & (np.abs(z) >= Z_EVENT) & ~excl
         idx = np.flatnonzero(big)
+        kept, last = [], -10**9
+        for i in idx:  # first qualifying centre day per `decluster` trading days
+            if i - last > decluster:
+                kept.append(i)
+                last = i
+        idx = np.asarray(kept, dtype=int)
         idx = idx[(idx + 1 < len(cal))]
         keep = period_mask[idx + 1]
         idx = idx[keep]

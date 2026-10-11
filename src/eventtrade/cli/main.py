@@ -97,6 +97,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                                lambda y, q: sec.insider_quarter(client, y, q),
                                lambda a, b: sec.filings_13d(client, a, b),
                                lambda: sec.company_tickers(client), now)
+    if cmd == "earnings-study":
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_earnings as pea
+
+        return pea.earnings_study(cfg, store, SecStore(cfg.sec_db_path), now)  # n_boot 2,000
     if cmd == "sec-small-study":
         from eventtrade.adapters.sec_store import SecStore
         from eventtrade.adapters.store import SqliteStore
@@ -221,6 +226,7 @@ def _parser() -> argparse.ArgumentParser:
                                      " study, look-ahead diagnostic, once only (O/R trials)")
     sub.add_parser("ingest-sec", help="ADR 0011: SEC insider purchases (quarterly data sets) and"
                                       " 13D filings into data/sec.sqlite; resumable")
+    sub.add_parser("earnings-study", help="ADR 0013: post-earnings drift (8-K 2.02), once only (P1)")
     sub.add_parser("sec-small-study", help="ADR 0012: insider purchases on non-S&P-1500 listed"
                                            " stocks, once only (S2)")
     sub.add_parser("sec-audit", help="ADR 0011: print 50 random 13D events (names, deal flag);"

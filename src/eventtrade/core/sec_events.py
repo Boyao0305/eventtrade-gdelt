@@ -239,7 +239,8 @@ class MatchedResult:
 
 
 def matched_placebo(events: pd.DataFrame, outcome: pd.DataFrame, strat: pd.DataFrame, h: int,
-                    sign: int, cal: pd.DatetimeIndex, n_draws: int, seed: int) -> MatchedResult:
+                    sign: int, cal: pd.DatetimeIndex, n_draws: int, seed: int,
+                    pool_strat: pd.DataFrame | None = None) -> MatchedResult:
     """One-sided p of the events' NW t (horizon h) against matched placebo dates.
 
     `outcome` and `strat` must be restricted to the period's eligible dates (embargo applied).
@@ -257,7 +258,9 @@ def matched_placebo(events: pd.DataFrame, outcome: pd.DataFrame, strat: pd.DataF
     n_ev, n_days = len(have), int(have["date"].nunique()) if len(have) else 0
     if not eventstudy.sufficient(n_ev, n_days) or not math.isfinite(t_obs):
         return MatchedResult(mean, t_obs, float("nan"), n_ev, n_days, 0, float("nan"))
-    pool = outcome.merge(strat, on=["date", "ticker"], how="inner")
+    ps = strat if pool_strat is None else pool_strat.assign(
+        date=pd.to_datetime(pool_strat["date"]), ticker=pool_strat["ticker"].astype(object))
+    pool = outcome.merge(ps, on=["date", "ticker"], how="inner")
     pool["pos"] = cal.get_indexer(pool["date"])
     groups = {k: (g["pos"].to_numpy(), g["value"].to_numpy(dtype=float))
               for k, g in pool.groupby(["ticker", "stratum"])}

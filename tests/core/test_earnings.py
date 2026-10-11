@@ -60,3 +60,37 @@ def test_bigmove_strata_excludes_earnings_window():
     assert CAL[250] in dates or CAL[251] in dates     # the non-earnings jump is a placebo day
     assert not any(CAL[345] <= d <= CAL[356] for d in dates)  # earnings window excluded
     assert set(st[st["date"].isin([CAL[250], CAL[251]])]["stratum"]) == {"pos"}
+
+
+def test_deal_filter_window_back2_timing_and_coverage():
+    cf = pd.DataFrame([["1", "8-K", "2016-03-07", "2.02,1.01", "a"],
+                       ["1", "8-K", "2016-06-01", "2.02", "b"]],
+                      columns=["cik", "form", "filing_date", "items", "accession"])
+    m = {"0000000001": "AAA"}
+    assert len(er.earnings_days(cf, m, CAL)) == 1
+    assert len(er.earnings_days(cf, m, CAL, deal_filter=False)) == 2
+    close = pd.DataFrame({"A": [10, 10, 11, 12, 12.0]}, index=CAL[:5])
+    h = {"A": pd.Series([5.0] * 5, index=CAL[:5])}
+    assert er.hedged_3day(close, h, back=2)["A"].iloc[2] == pytest.approx(12 / 10 - 1)
+    p = np.full(30, 100.0)
+    p[19:] = 110.0  # the big move happens the day before d
+    cl = pd.DataFrame({"A": p}, index=CAL[:30])
+    hh = {"A": pd.Series(100.0, index=CAL[:30])}
+    share = er.pre_reaction_share(cl, hh, pd.DataFrame({"ticker": ["A"], "d": [CAL[20]]}))
+    assert share.loc[2016] == 1.0
+    earn_all = pd.DataFrame({"ticker": ["A"] * 4 + ["B"] * 2,
+                             "d": pd.to_datetime(["2016-02-01", "2016-05-01", "2016-08-01",
+                                                  "2016-11-01", "2016-02-01", "2016-05-01"])})
+    assert er.coverage_ok(earn_all, range(2016, 2017)) == {"A"}
+
+
+def test_bigmove_declustering():
+    rng = np.random.default_rng(3)
+    p = 100 * np.cumprod(1 + rng.normal(0, 0.005, len(CAL)))
+    p[260:] *= 1.08
+    p[262:] *= 1.08
+    close = pd.DataFrame({"A": p}, index=CAL)
+    r3 = er.hedged_3day(close, {"A": pd.Series(100.0, index=CAL)})
+    st = er.bigmove_strata(r3, pd.DataFrame({"ticker": [], "d": []}), np.ones(len(CAL), dtype=bool))
+    near = st[(st["date"] >= CAL[255]) & (st["date"] <= CAL[270])]
+    assert len(near) == 1
