@@ -142,6 +142,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                                lambda ts, url: dod.fetch_article(wb, ts, url), now,
                                limit=args.limit, relist=args.relist,
                                fetch_errors=(dod.DodError, OSError, EOFError))
+    if cmd == "map-dod":
+        from eventtrade.adapters import sec
+        from eventtrade.adapters.dod_store import DodStore
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_dod as pdod
+        from eventtrade.cli import pipelines_dod_map as pmap
+
+        client = sec.SecClient(cfg.sec_user_agent)
+        if not cfg.dod_db_path.exists():
+            print(f"no DoD store at {cfg.dod_db_path}: run `eventtrade ingest-dod`",
+                  file=sys.stderr)
+            return pipelines.MISSING
+        return pmap.map_dod(cfg, SecStore(cfg.sec_db_path),
+                            DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start),
+                            lambda cik: sec.former_names(client, cik),
+                            lambda phrase, q: sec.ex21_parents(client, phrase, q),
+                            lambda cik, adsh, doc: sec.ex21_document(client, cik, adsh, doc),
+                            now,
+                            out=args.out, limit_names=args.limit_names,
+                            fetch=not args.no_fetch)
     if cmd == "foresight-country":
         from eventtrade.cli import pipelines_foresight as pfo
 
@@ -256,6 +276,16 @@ def _parser() -> argparse.ArgumentParser:
                    help="fetch at most N articles this run (for a trial run)")
     s.add_argument("--relist", action="store_true",
                    help="list the Wayback captures again (default: reuse the cached listing)")
+    s = sub.add_parser("map-dod", help="ADR 0015 amendment 3: map DoD sole awardees to issuer"
+                                       " CIKs (EDGAR names, Exhibit 21 search); resumable;"
+                                       " reads no prices")
+    s.add_argument("--out", type=Path, default=Path("docs/data/dod_issuer_map.csv"),
+                   help="mapping CSV (default: docs/data/dod_issuer_map.csv, relative to the"
+                        " current directory)")
+    s.add_argument("--limit-names", type=int, default=None, dest="limit_names",
+                   help="smoke run: only the N searchable names with the most award dollars")
+    s.add_argument("--no-fetch", action="store_true", dest="no_fetch",
+                   help="resolve from the cached names and Exhibit 21 hits only")
     sub.add_parser("foresight-country", help="ADR 0010: foresight for country categories with"
                                              " first-firing freshness, once only (O2 trials)")
     sub.add_parser("intraday-search", help="ADR 0008: intraday parameter search, 34 cells x 160"

@@ -16,9 +16,22 @@ Tables (raw, as the SEC publishes them; columns lower-cased):
 - company_filings2(cik, form, filing_date, items, accession)  ADR 0012 profile filings: forms
                                              sec.PROFILE_FORMS, 8-A12B/8-A12G at any date, others
                                              2015-01-01..2025-03-31
+- ex21_hits(phrase, cik, file_date, adsh, doc)  ADR 0015 amendment 3: 10-K Exhibit 21
+                                             documents that full-text search finds for a
+                                             normalised awardee name (cik = filer)
+- ex21_entries(adsh, doc, cik, file_date, entry_norm)  normalised subsidiary entries parsed
+                                             from those documents
+- sec_names(cik, name, valid_from, valid_to, last_filing)  ADR 0015 amendment 3: current and
+                                             former EDGAR names with validity dates (None =
+                                             open) and the CIK's last filing date
 - sec_pulls(kind, period, rows, pulled_at)   resume ledger: kind 'insider' (period '2016q1'),
                                              '13d' (period '2016-03'), 'submissions' (period =
-                                             cik), 'subject13d' (period = adsh) or 'profile'
+                                             cik), 'subject13d' (period = adsh), 'profile'
+                                             (period = cik), 'shares' (period = cik), 'ex21'
+                                             (period = phrase; 'ex21cap' too when EFTS's
+                                             10,000-hit window cut the search short, rows =
+                                             total hits), 'ex21doc' (period =
+                                             'v<parser version>:adsh/doc') or 'names'
                                              (period = cik)
 """
 
@@ -46,6 +59,9 @@ _TABLES = {
     "company_meta": ["cik", "name", "sic", "former_names"],
     "company_filings2": ["cik", "form", "filing_date", "items", "accession"],
     "shares_out": ["cik", "tag", "end", "val", "filed", "form", "accn"],
+    "ex21_hits": ["phrase", "cik", "file_date", "adsh", "doc"],
+    "ex21_entries": ["adsh", "doc", "cik", "file_date", "entry_norm"],
+    "sec_names": ["cik", "name", "valid_from", "valid_to", "last_filing"],
 }
 _DDL = "\n".join(f"CREATE TABLE IF NOT EXISTS {t} ({', '.join(c + ' TEXT' for c in cols)});"
                  for t, cols in _TABLES.items()) + """
@@ -58,6 +74,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_subject ON subject_13d(adsh);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_meta ON company_meta(cik);
 CREATE INDEX IF NOT EXISTS ix_cf2_cik ON company_filings2(cik, filing_date);
 CREATE INDEX IF NOT EXISTS ix_shares_cik ON shares_out(cik, filed);
+CREATE INDEX IF NOT EXISTS ix_ex21_phrase ON ex21_hits(phrase);
+CREATE INDEX IF NOT EXISTS ix_names_cik ON sec_names(cik);
+CREATE INDEX IF NOT EXISTS ix_ex21e_norm ON ex21_entries(entry_norm);
+CREATE INDEX IF NOT EXISTS ix_ex21e_doc ON ex21_entries(adsh, doc);
 CREATE TABLE IF NOT EXISTS sec_pulls (kind TEXT NOT NULL, period TEXT NOT NULL,
     rows INTEGER NOT NULL, pulled_at TEXT NOT NULL, PRIMARY KEY (kind, period));
 """
@@ -71,6 +91,7 @@ class SecStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.execute("PRAGMA journal_mode=WAL")
+            _migrate(c)
             c.executescript(_DDL)
 
     def pulled(self, kind: str) -> set[str]:
@@ -155,6 +176,60 @@ class SecStore:
                       ("shares", cik, len(df), _iso(now)))
         return len(df)
 
+    def write_ex21(self, phrase: str, df: pd.DataFrame, now: datetime,
+                   capped: bool = False, total: int | None = None) -> int:
+        """Replace one phrase's Exhibit 21 hits and record it (kind 'ex21'; also 'ex21cap' if
+        the search was cut short), atomically."""
+        cols = _TABLES["ex21_hits"]
+        with self._conn() as c:
+            c.execute("DELETE FROM ex21_hits WHERE phrase = ?", (phrase,))
+            c.executemany(f"INSERT INTO ex21_hits VALUES ({','.join('?' * len(cols))})",
+                          df[cols].astype(object).where(df[cols].notna(), None)
+                          .itertuples(index=False, name=None))
+            c.execute("DELETE FROM sec_pulls WHERE kind = 'ex21cap' AND period = ?", (phrase,))
+            if capped:
+                c.execute("INSERT INTO sec_pulls VALUES (?,?,?,?)",
+                          ("ex21cap", phrase, int(total or 0), _iso(now)))
+            c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
+                      ("ex21", phrase, len(df), _iso(now)))
+        return len(df)
+
+    def write_names(self, cik: str, names: list[tuple[str, str | None, str | None]],
+                    now: datetime, last_filing: str | None = None) -> int:
+        """Replace one CIK's (name, valid_from, valid_to) rows, with its last filing date, and
+        record it (kind 'names')."""
+        with self._conn() as c:
+            c.execute("DELETE FROM sec_names WHERE cik = ?", (cik,))
+            c.executemany("INSERT INTO sec_names VALUES (?,?,?,?,?)",
+                          [(cik, n, a, b, last_filing) for n, a, b in names])
+            c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
+                      ("names", cik, len(names), _iso(now)))
+        return len(names)
+
+    def write_ex21_entries(self, adsh: str, doc: str, cik: str, file_date: str,
+                           entries: set[str] | list[str], now: datetime,
+                           version: int = 1) -> int:
+        """Replace one Exhibit 21 document's normalised entries and record it (kind 'ex21doc',
+        period 'v<version>:adsh/doc', version = the entry parser's), atomically. No entries
+        (document gone or unparsable) is recorded too."""
+        with self._conn() as c:
+            c.execute("DELETE FROM ex21_entries WHERE adsh = ? AND doc = ?", (adsh, doc))
+            c.executemany("INSERT INTO ex21_entries VALUES (?,?,?,?,?)",
+                          [(adsh, doc, cik, file_date, e) for e in sorted(entries)])
+            c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
+                      ("ex21doc", f"v{version}:{adsh}/{doc}", len(entries), _iso(now)))
+        return len(entries)
+
+    def read_ex21_entries(self, norms: set[str] | list[str]) -> pd.DataFrame:
+        """ex21_entries rows whose entry_norm is one of `norms`."""
+        cols = _TABLES["ex21_entries"]
+        with self._conn() as c:
+            c.execute("CREATE TEMP TABLE want (n TEXT PRIMARY KEY)")
+            c.executemany("INSERT OR IGNORE INTO want VALUES (?)", [(n,) for n in norms])
+            return pd.read_sql_query(
+                f"SELECT {', '.join('e.' + x for x in cols)} FROM ex21_entries e"
+                " JOIN want w ON w.n = e.entry_norm", c)
+
     def read(self, table: str) -> pd.DataFrame:
         cols = _TABLES[table]
         with self._conn() as c:
@@ -173,6 +248,18 @@ class SecStore:
                 yield conn
         finally:
             conn.close()
+
+
+def _migrate(c: sqlite3.Connection) -> None:
+    """ADR 0015 caches created before their last column existed are dropped (and their ledger
+    entries cleared) so they are rebuilt: ex21_hits without `doc`, sec_names without
+    `last_filing`. Other tables are never touched."""
+    for table, col, kinds in (("ex21_hits", "doc", ("ex21", "ex21cap")),
+                              ("sec_names", "last_filing", ("names",))):
+        have = [r[1] for r in c.execute(f"PRAGMA table_info({table})")]
+        if have and col not in have:
+            c.execute(f"DROP TABLE {table}")
+            c.executemany("DELETE FROM sec_pulls WHERE kind = ?", [(k,) for k in kinds])
 
 
 def _iso(t: datetime) -> str:

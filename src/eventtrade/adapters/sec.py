@@ -278,3 +278,94 @@ def shares_outstanding(client: SecClient, cik: str) -> pd.DataFrame:
             return pd.DataFrame(rows, columns=SHARES_COLS).drop_duplicates() \
                 .sort_values(["filed", "end"]).reset_index(drop=True)
     return pd.DataFrame(columns=SHARES_COLS)
+
+
+EX21_FORMS = "10-K,10-K405,10-KT"  # EFTS matches root forms, so amendments (10-K/A) come too
+EX21_FROM, EX21_TO = "2014-01-01", SUBMISSIONS_TO
+EFTS_CAP = 10_000
+EX21_COLS = ["phrase", "cik", "file_date", "adsh", "doc"]
+ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{nodash}/{doc}"
+
+
+def ex21_parents(client: SecClient, phrase: str, query: str | None = None) -> pd.DataFrame:
+    """ADR 0015 amendment 3: Exhibit 21 documents of 10-Ks filed 2014-01-01..2025-03-31 that
+    EDGAR full-text search finds for `phrase`.
+
+    `query` is the EFTS q string (default: the quoted phrase). Every page is read (100 hits a
+    page) up to EFTS's 10,000-hit window; only documents whose file_type starts with 'EX-21'
+    are kept; cik is the first listed CIK (the filer) and doc the document's file name. Columns
+    EX21_COLS, one row per (cik, adsh, doc). attrs: total (EFTS hit count) and capped (True if
+    the window was hit and the remaining pages could not be read). A hit only says the words
+    occur in the exhibit; `ex21_document` + `core.dod_issuers.ex21_entries` verify the entry."""
+    rows: dict[tuple[str, str, str], tuple[str, str, str, str, str]] = {}
+    offset, total, capped = 0, 0, False
+    while True:
+        params = {"q": query or f'"{phrase}"', "forms": EX21_FORMS, "dateRange": "custom",
+                  "startdt": EX21_FROM, "enddt": EX21_TO, "from": offset}
+        hits = client.get(EFTS_URL, params).json()["hits"]
+        page = hits["hits"]
+        total = int(hits["total"]["value"])
+        for h in page:
+            s = h.get("_source") or {}
+            if not str(s.get("file_type") or "").upper().startswith("EX-21"):
+                continue
+            ciks = s.get("ciks") or []
+            _id = str(h.get("_id", ""))
+            if not ciks or ":" not in _id:
+                continue
+            cik = str(ciks[0]).zfill(10)
+            adsh = s.get("adsh") or _id.split(":")[0]
+            doc = _id.split(":", 1)[1]
+            rows.setdefault((cik, adsh, doc), (phrase, cik, s.get("file_date"), adsh, doc))
+        offset += len(page)
+        if not page or offset >= total:
+            break
+        if offset >= EFTS_CAP:
+            capped = True
+            break
+    df = pd.DataFrame(list(rows.values()), columns=EX21_COLS)         .sort_values(["file_date", "cik", "adsh", "doc"]).reset_index(drop=True)
+    df.attrs.update(total=total, capped=capped)
+    return df
+
+
+def ex21_document(client: SecClient, cik: str, adsh: str, doc: str) -> str:
+    """Text of one Exhibit 21 document from the EDGAR archive ('' if it is gone: HTTP 404)."""
+    url = ARCHIVE_URL.format(cik=int(cik), nodash=adsh.replace("-", ""), doc=doc)
+    try:
+        return client.get(url).text
+    except SecError as e:
+        if "HTTP 404" in str(e):
+            return ""
+        raise
+
+
+Names = list[tuple[str, str | None, str | None]]
+
+
+def former_names(client: SecClient, cik: str) -> tuple[Names, str | None]:
+    """ADR 0015 amendment 3: a CIK's EDGAR names with validity dates ('YYYY-MM-DD' or None =
+    open), and its last filing date, from the submissions API: every `formerNames` entry (from,
+    to), plus the current `name`, valid from the latest former 'to' (None if no former name)
+    onwards; last filing = the latest `filings.recent.filingDate` (None if none). An unknown CIK
+    (HTTP 404) has no names."""
+    cik = str(cik).zfill(10)
+    try:
+        d = client.get(SUBMISSIONS_URL.format(name=f"CIK{cik}.json")).json()
+    except SecError as e:
+        if "HTTP 404" in str(e):
+            return [], None
+        raise
+    out: Names = []
+    ends: list[str] = []
+    for f in d.get("formerNames") or []:
+        if not f.get("name"):
+            continue
+        start, end = (f.get("from") or "")[:10] or None, (f.get("to") or "")[:10] or None
+        out.append((str(f["name"]), start, end))
+        if end:
+            ends.append(end)
+    if d.get("name"):
+        out.append((str(d["name"]), max(ends) if ends else None, None))
+    dates = [x for x in ((d.get("filings") or {}).get("recent") or {}).get("filingDate") or []
+             if x]
+    return out, (max(dates)[:10] if dates else None)
