@@ -120,3 +120,11 @@ def test_award_paragraphs(text, names, amount, kind):
 
 def test_non_award_paragraph_is_skipped():
     assert parse_award("Work will be performed in Norfolk, Virginia.") is None
+
+
+def test_amount_scale_words():
+    from eventtrade.core.dod_parse import _amount
+
+    assert _amount("is awarded a $49,000,000 million contract")[0] == 49_000_000.0
+    assert _amount("is awarded a $1.2 billion contract")[0] == 1.2e9
+    assert _amount("is awarded a $12.5 million contract")[0] == 12.5e6

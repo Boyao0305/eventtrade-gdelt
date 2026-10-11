@@ -121,16 +121,20 @@ def ingest_sec_extra(cfg: Config, sstore: Any, store: Any, submissions_fn: Calla
 
 
 def ingest_sec_shares(cfg: Config, sstore: Any, stores: list[Any],
-                      shares_fn: Callable[[str], Any], now: Clock, echo: Echo = print) -> int:
-    """ADR 0015 input, resumable: XBRL share counts (filed before the hold-out) of every
-    company in the given price stores' assets (any track) that maps to a CIK. Reads no prices."""
+                      shares_fn: Callable[[str], Any], now: Clock, echo: Echo = print,
+                      ciks: list[str] | None = None) -> int:
+    """ADR 0015 input, resumable: XBRL share counts (filed before the hold-out) of the given
+    CIKs, or else of every company in the given price stores' assets (any track) that maps to a
+    CIK. Reads no prices."""
     sstore.init()
-    tick = sstore.read("cik_tickers")
-    assets = [a for s in stores for a in s.read_assets()]
-    if not assets or tick.empty:
-        echo("missing: assets or the CIK -> ticker map (run load-universe, ingest-sec)")
-        return MISSING
-    ciks = sorted(set(universe_ciks(assets, tick).values()))
+    if ciks is None:
+        tick = sstore.read("cik_tickers")
+        assets = [a for s in stores for a in s.read_assets()]
+        if not assets or tick.empty:
+            echo("missing: assets or the CIK -> ticker map (run load-universe, ingest-sec)")
+            return MISSING
+        ciks = sorted(set(universe_ciks(assets, tick).values()))
+    ciks = sorted({str(c).zfill(10) for c in ciks})
     done = sstore.pulled("shares")
     todo = [c for c in ciks if c not in done]
     echo(f"shares: {len(ciks)} CIKs, {len(todo)} to pull")

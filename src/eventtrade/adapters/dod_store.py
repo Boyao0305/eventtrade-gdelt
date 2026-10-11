@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS dod_awards (article_id INTEGER NOT NULL, seq INTEGER 
     release_date TEXT NOT NULL, agency TEXT, awardees TEXT NOT NULL, amount REAL, kind TEXT,
     small_business INTEGER, text TEXT, PRIMARY KEY (article_id, seq));
 CREATE INDEX IF NOT EXISTS ix_dod_awards_date ON dod_awards(release_date);
+CREATE TABLE IF NOT EXISTS dod_splits (ticker TEXT NOT NULL, date TEXT NOT NULL,
+    ratio REAL NOT NULL, PRIMARY KEY (ticker, date));
+CREATE TABLE IF NOT EXISTS dod_split_pulls (ticker TEXT PRIMARY KEY, n INTEGER NOT NULL);
 """
 
 
@@ -113,6 +116,26 @@ class DodStore:
         for r in rows:
             r["awardees"] = json.loads(r["awardees"])
         return rows
+
+    def write_splits(self, tickers: list[str], df: Any) -> int:
+        """Replace the split history of `tickers` (rows of df: ticker, date, ratio) and record
+        them as pulled (also those without splits)."""
+        with self._conn() as c:
+            c.executemany("DELETE FROM dod_splits WHERE ticker = ?", [(t,) for t in tickers])
+            c.executemany("INSERT INTO dod_splits VALUES (?,?,?)",
+                          df[["ticker", "date", "ratio"]].itertuples(index=False, name=None))
+            n = df.groupby("ticker").size().to_dict() if len(df) else {}
+            c.executemany("INSERT OR REPLACE INTO dod_split_pulls VALUES (?,?)",
+                          [(t, int(n.get(t, 0))) for t in tickers])
+        return len(df)
+
+    def split_pulled(self) -> set[str]:
+        with self._conn() as c:
+            return {t for (t,) in c.execute("SELECT ticker FROM dod_split_pulls")}
+
+    def splits(self) -> list[tuple[str, str, float]]:
+        with self._conn() as c:
+            return list(c.execute("SELECT ticker, date, ratio FROM dod_splits ORDER BY ticker, date"))
 
     def counts(self) -> dict[str, int]:
         with self._conn() as c:

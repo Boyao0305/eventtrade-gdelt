@@ -291,7 +291,8 @@ def _amount(text: str) -> tuple[float | None, int]:
         return None, 0
     v = float(m.group(1).replace(",", "").replace(" ", "") + (m.group(2) or ""))
     scale = (m.group(3) or "").lower()
-    v *= 1e9 if scale == "billion" else 1e6 if scale == "million" else 1.0
+    if v < 1e6:   # "$49,000,000 million" is a typo in the release: the digits are the amount
+        v *= 1e9 if scale == "billion" else 1e6 if scale == "million" else 1.0
     return v, m.end()
 
 

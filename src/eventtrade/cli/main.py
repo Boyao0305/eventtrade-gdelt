@@ -142,6 +142,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                                lambda ts, url: dod.fetch_article(wb, ts, url), now,
                                limit=args.limit, relist=args.relist,
                                fetch_errors=(dod.DodError, OSError, EOFError))
+    if cmd == "ingest-dod-prices":
+        import pandas as pd
+
+        from eventtrade.adapters import prices
+        from eventtrade.adapters.dod_store import DodStore
+        from eventtrade.cli import pipelines_dod as pdod
+
+        return pdod.ingest_dod_prices(
+            cfg, pd.read_csv(args.map, dtype=str), SqliteStore(cfg.home / "data" / "dodcap.sqlite"),
+            DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start), _fetch_yf,
+            lambda ts: prices.fetch_splits(ts, cfg.holdout_start), prices.sanity_check)
+    if cmd == "ingest-sec-shares":
+        import pandas as pd
+
+        from eventtrade.adapters import sec
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_sec as psec
+
+        client = sec.SecClient(cfg.sec_user_agent)
+        m = pd.read_csv(args.map, dtype=str)
+        return psec.ingest_sec_shares(cfg, SecStore(cfg.sec_db_path), [],
+                                      lambda cik: sec.shares_outstanding(client, cik), now,
+                                      ciks=sorted(set(m["cik"].dropna())))
     if cmd == "map-dod":
         from eventtrade.adapters import sec
         from eventtrade.adapters.dod_store import DodStore
@@ -276,6 +299,11 @@ def _parser() -> argparse.ArgumentParser:
                    help="fetch at most N articles this run (for a trial run)")
     s.add_argument("--relist", action="store_true",
                    help="list the Wayback captures again (default: reuse the cached listing)")
+    s = sub.add_parser("ingest-dod-prices", help="ADR 0015 amendment 2: daily prices + splits of"
+                                                 " every mapped issuer (data/dodcap.sqlite)")
+    s.add_argument("--map", default="docs/data/dod_issuer_map.csv")
+    s = sub.add_parser("ingest-sec-shares", help="ADR 0015: XBRL share counts of mapped issuers")
+    s.add_argument("--map", default="docs/data/dod_issuer_map.csv")
     s = sub.add_parser("map-dod", help="ADR 0015 amendment 3: map DoD sole awardees to issuer"
                                        " CIKs (EDGAR names, Exhibit 21 search); resumable;"
                                        " reads no prices")

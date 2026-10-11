@@ -136,3 +136,50 @@ def _summary(dstore: DodStorePort, echo: Echo) -> None:
     fails = Counter(a["status"] for a in arts if a["status"] not in
                     ("ok", "out_of_range", "not_contracts"))
     echo(f"parse/fetch failures: {dict(fails) or 0}")
+
+
+DOD_HEDGES = ("SPY", "IWM", "ITA", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE",
+              "XLU", "XLV", "XLY")
+
+
+def mapped_tickers(map_rows: Any) -> list[str]:
+    """Current tickers of mapped issuers in the frozen issuer map (ADR 0015 amendment 2): plain
+    symbols only (no '-', '.', '^': preferreds, units, other share classes), sorted."""
+    t = map_rows.loc[map_rows["cik"].notna() & map_rows["ticker_now"].notna(), "ticker_now"]
+    t = {str(x).strip().upper() for x in t if str(x).strip()}
+    return sorted(x for x in t if not any(c in x for c in "-.^"))
+
+
+def ingest_dod_prices(cfg: Config, map_rows: Any, prices_store: Any, dstore: Any,
+                      fetch_prices: Callable[..., Any], fetch_splits: Callable[[list[str]], Any],
+                      sanity: Any, echo: Echo = print) -> int:
+    """Daily prices (dev window, separate store) for every mapped issuer with a current ticker
+    plus the hedges, then their Yahoo split histories (for raw closes); resumable. Reads no
+    returns: it only writes prices."""
+    from eventtrade.cli import pipelines as pl
+
+    tickers = mapped_tickers(map_rows)
+    if not tickers:
+        echo("no mapped tickers: run `map-dod` first")
+        return MISSING
+    prices_store.init()
+    dstore.init()
+    have = set(prices_store.read_prices(None, None, None)["ticker"].unique())
+    todo = [t for t in [*tickers, *DOD_HEDGES] if t not in have]
+    echo(f"dod prices: {len(tickers)} mapped tickers + {len(DOD_HEDGES)} hedges;"
+         f" {len(todo)} to fetch")
+    rc = OK
+    if todo:
+        window = pl._dev_window(cfg, None, None, echo)
+        if window is None:
+            return MISSING
+        rc = pl._ingest_prices_window(prices_store, fetch_prices, todo, None, *window, sanity,
+                                      100, echo)
+    pulled = dstore.split_pulled()
+    todo_s = [t for t in tickers if t not in pulled]
+    echo(f"splits: {len(todo_s)} ticker(s) to fetch")
+    for i in range(0, len(todo_s), 50):
+        batch = todo_s[i:i + 50]
+        dstore.write_splits(batch, fetch_splits(batch))
+    echo(f"done: {len(dstore.splits())} split rows")
+    return rc

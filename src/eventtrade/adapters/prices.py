@@ -54,6 +54,24 @@ class StooqError(RuntimeError):
 
 # --- yfinance -------------------------------------------------------------------------------
 
+def fetch_splits(tickers: list[str], end: date, ticker_factory: Callable[[str], object] | None = None
+                 ) -> pd.DataFrame:
+    """Yahoo split history (ticker, date, ratio) before `end`; tickers without splits have no rows.
+    ratio = new shares per old share (2.0 for a 2-for-1)."""
+    if ticker_factory is None:
+        import yfinance as yf
+        ticker_factory = yf.Ticker
+    rows = []
+    for t in tickers:
+        s = ticker_factory(t).splits  # type: ignore[attr-defined]
+        for d, r in (s.items() if s is not None else []):
+            ts = pd.Timestamp(d)
+            ts = (ts.tz_localize(None) if ts.tzinfo else ts).normalize()
+            if ts.date() < end and float(r) > 0:
+                rows.append((t, ts.date().isoformat(), float(r)))
+    return pd.DataFrame(rows, columns=["ticker", "date", "ratio"])
+
+
 def fetch_yfinance(
     tickers: list[str],
     start: date,
