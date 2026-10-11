@@ -97,6 +97,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                                lambda y, q: sec.insider_quarter(client, y, q),
                                lambda a, b: sec.filings_13d(client, a, b),
                                lambda: sec.company_tickers(client), now)
+    if cmd == "macro-study":
+        from eventtrade.cli import pipelines_macro as pmac
+
+        return pmac.macro_study(cfg, store, _istore(cfg), now)  # n_boot 10,000
     if cmd == "earnings-study":
         from eventtrade.adapters.sec_store import SecStore
         from eventtrade.cli import pipelines_earnings as pea
@@ -226,6 +230,7 @@ def _parser() -> argparse.ArgumentParser:
                                      " study, look-ahead diagnostic, once only (O/R trials)")
     sub.add_parser("ingest-sec", help="ADR 0011: SEC insider purchases (quarterly data sets) and"
                                       " 13D filings into data/sec.sqlite; resumable")
+    sub.add_parser("macro-study", help="ADR 0014: scheduled macro announcements on SPY, once only (M)")
     sub.add_parser("earnings-study", help="ADR 0013: post-earnings drift (8-K 2.02), once only (P1)")
     sub.add_parser("sec-small-study", help="ADR 0012: insider purchases on non-S&P-1500 listed"
                                            " stocks, once only (S2)")
