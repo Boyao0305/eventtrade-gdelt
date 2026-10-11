@@ -97,6 +97,36 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
   departures (5.02) and auditor changes or non-reliance (4.01/4.02) are negative-information
   events with a short-side prior. Same machinery as ADR 0013, with the permutation-style null.
 
+**2026-10-11 (later) — ADR 0015, DoD contract awards: in progress (nothing matched to returns).**
+- **Why this line:** 8-K distress items have too few events in the S&P 500/400 (e.g. 4.02:
+  15 in 2016–19). In the small-cap store they are survivor-biased and hard to short. DoD
+  publishes every award of $7.5M or more daily at 17:00 ET.
+- **Done:**
+  - ADR 0015 with review amendments (3 blockers).
+  - `ingest-dod` (Wayback CDX + captures; defense.gov itself returns 403 to scripts):
+    2,548 articles with status ok, ~250/yr for 2015–24, and 36,338 award paragraphs.
+  - `map-dod`: title / former name / verified Exhibit 21 entry / division prefix, dated, with
+    conflicts → ambiguous.
+  - `ingest-dod-prices` (store `data/dodcap.sqlite` + full split history in `dod.sqlite`).
+  - `ingest-sec-shares` (dei shares, us-gaap fallback, public float, profiles of unlisted
+    CIKs).
+  - `dod-study` (once-only, hypothesis D) with an e2e test.
+- **Running:** the full `map-dod` (log `tmp/map.log`; names ~2 h, then Exhibit 21 search and
+  documents ~4–6 h; resumable: rerun `bash tmp/et.sh map-dod`).
+- **Remaining, in order (amendments):**
+  1. Commit `docs/data/dod_issuer_map.csv`.
+  2. Run `ingest-dod-prices`, then `ingest-sec-shares`.
+  3. Amount audit (agent, 200 paragraphs, stratified by ratio; ratio uses market caps, no
+     returns).
+  4. Blind mapping audit (second agent, 150 paragraphs).
+  5. Freeze: SHA-256 of the map, parser and audit in the ADR; commit.
+  6. Run `dod-study` once from the frozen checkout.
+- **Notes:**
+  - The scraper agent opened two Aug/Sep 2025 DoD articles (hold-out period, no prices) while
+    exploring HTML structure. They are not used.
+  - My first defense.gov probe carried the user's email in its User-Agent. Non-SEC requests
+    don't anymore.
+
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is
   documented in ADR 0011; no fix is planned (ticker reuse risk).
