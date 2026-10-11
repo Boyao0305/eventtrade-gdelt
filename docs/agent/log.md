@@ -1,160 +1,57 @@
 # Agent log
 
-Current session. Earlier sessions: see `index.md`. Live state (row counts, BigQuery spend this
-month, trial counts) comes from `eventtrade status`, not from this file.
+Current session. Earlier sessions: see `index.md` (latest archive:
+`archive/2026-10-06-intraday-foresight-sec.md`). Live state (row counts, BigQuery spend, trial
+counts) comes from `eventtrade status` and `intraday-status`, not from this file.
 
-## 2026-10-06 — handoff before context compaction
+## 2026-10-10 — handoff (convention §14.5)
 
-**Where things are.** Branch `dev` of the standalone repo `workspace/gdelt`, worktree
-`.claude/worktrees/gdelt-dev`, pushed to the private remote `origin`
-(`github.com/Boyao0305/eventtrade-gdelt`, default branch `dev`). `main` holds only the initial
-commit; do not merge or push it without the user. Frozen checkout for trial-logging runs:
-`.claude/worktrees/gdelt-snap` (last at `344d4bf`).
+**Where things are.**
+- Branch `dev` of the standalone repo `workspace/gdelt`, worktree `.claude/worktrees/gdelt-dev`,
+  pushed to the private `origin` (`github.com/Boyao0305/eventtrade-gdelt`).
+- `main` holds only the initial commit; do not merge or push it without the user.
+- Frozen checkout for trial-logging runs: `.claude/worktrees/gdelt-snap` (last at `5c9ab58`).
+- Data lives in the main checkout (`EVENTTRADE_HOME=.../workspace/gdelt`):
+  - `data/eventtrade.sqlite`: main store (assets, daily prices, GDELT daily, trials);
+  - `data/intraday.sqlite`: Alpaca 15-minute bars and 15-minute GDELT;
+  - `data/sec.sqlite`: SEC Form 4, 13D, submissions, CIK map.
 
-**Research result so far.** Every pre-registered hypothesis except A2 is tested and null:
-v1/v2 gate 1 (experiments 0003–0004), ADR 0003 screen (0005), ADR 0005 extreme-shock event
-study with nested optimization (0006), ADR 0006 F1 follow-up (0007, failed out of sample,
-p 0.68). Trials in the store: 1,843. Hold-out (≥ 2025-04-01) untouched.
+**Research results (all pre-registered; see `docs/experiments/`).**
 
-**In flight — A2 theme screen (ADR 0004), user approved on 2026-10-06.**
-- Code ready (`screen --track A --set a2`); refuses until every dev month of `gkg_themes_daily`
-  is stored. Stored: 2015-03 → 2017-08. October's free 1 TiB is nearly used (894.7 GB billed).
-- The user connected a card and allowed spending, **cap $20 total without approval**. Price
-  confirmed: $6.25/TiB after the free 1 TiB/month. Remaining pull ≈ 680 GB (estimate from
-  experiment 0001; re-check with a dry run) → roughly $3 at current month-to-date usage.
-- Next steps: (1) dry-run `ingest-gdelt gkg-themes --start 2015-03-02 --end 2025-03-31` for the
-  exact estimate; (2) raise `bq_monthly_budget_bytes` for this run only as far as the $20 cap
-  allows (there is no CLI flag yet — `cli/main.py` builds `GdeltBigQuery` from
-  `cfg.bq_monthly_budget_bytes`; add a `--budget-gb` flag or an env override, with a test);
-  (3) `--execute` the pull (single process, so the guard checks spend sequentially);
-  (4) verify "0 to pull"; (5) refresh the frozen checkout and run `screen --track A --set a2`
-  once; (6) write experiment 0008.
-- Known latent issue (not used by A2): the v2 `_FAMILIES` theme family (`gkg.theme_docs.mean`)
-  does not treat `theme_docs` as a day-total metric (`features.DAY_TOTAL_N_METRICS`); fix before
-  any `build-dataset`/`signal-study` on themes.
+| Line | ADR → experiment | Verdict |
+|---|---|---|
+| GDELT daily signals, screens, event study, F1 | 0001–0006 → 0003–0007 | null |
+| GDELT themes (A2) | 0004 → 0008 | null |
+| GDELT intraday, fixed configuration | 0007 → 0009 | null (all means within ±2.3 bp) |
+| GDELT intraday parameter search, 34 cells × 160 configurations | 0008 → 0010 | null (nothing beats costs) |
+| Foresight, company and country, look-ahead diagnostic | 0009 → 0011 | company pre-news drift does not replicate; country underpowered |
+| Foresight, country, first-firing freshness | 0010 → 0012 | null with power (0/154) |
+| **SEC insider purchases and 13Ds** | **0011 → 0013** | **insider buys: +2% (all) to +3% (CEO/CFO, clusters) vs sector at 60 days, replicated 2016–19 and 2020–25, net of 30 bp; formally not confirmed (Holm: p 0.009 vs 0.0071).** 13D null |
 
-**2026-10-06, after compaction — A2 pull started.** Dry run: 658.57 GB for 2017-09 → 2025-03
-(month-to-date billed 894.67 GB) → ~1,553 GB this month, ~454 GB over the free 1 TiB ≈ $2.6.
-Added `ingest-gdelt --budget-gb` (commit `074ff8e`; ceiling 4,600 GB = free tier + $20 cap) and
-started three concurrent `--execute --budget-gb 1600` pulls over 2017-09→2020-06, 2020-07→2022-12,
-2023-01→2025-03 (logs `pull_t{1,2,3}.log` in the job tmp dir). If interrupted, rerun the same
-commands: stored months are skipped. Budget raised to 1,600 GB for this run only (worst case
-≈ $2.9).
+- **Trials:** 8,182 total, 7,808 counting for DSR. The 374 look-ahead trials (O, O2, R) are
+  excluded by `counts_for_dsr`.
+- **Spend:** BigQuery ≈ $5.25 of the user's $20 cap. Everything since then is free (Alpaca,
+  SEC).
 
-**2026-10-06 — A2 done, null (experiment 0008).** All three pulls finished. "0 to pull" was
-verified (121/121 months); October billed 1,553.29 GB ≈ $2.6 over the free tier. Frozen checkout
-moved to `074ff8e`; `screen --track A --set a2` ran once: joint p_S 0.200, p_M 0.117 → stops;
-8 trials, store total 1,851. **Every ADR 0001 hypothesis is now tested; none passed.** No further
-trial-logging run without a new ADR and the user's input on direction (intraday data, new
-sources).
-- Open: `test_screen_confirms_only_discovered_cells` failed once in a `-k "screen or theme or a2"`
-  run (EB `shrunk_ic` None for a non-commodity cell), then passed 4 times (alone, whole file,
-  same subset twice); pairwise bisect found no leaking test. Treat as a flake to investigate. It
-  cannot change a verdict (EB feeds notes, not the BH discovered set).
-- Fixed on dev after the run: the dry run warned "estimate exceeds what is left" for a 0 GB
-  estimate when the month was over budget.
+**Next steps (the user delegated the choice and order of sources).**
+1. **ADR 0012: replicate insider purchases on fresh stocks.**
+   - Issuers outside the S&P 500/400, using the same SEC data already stored. Prices from
+     yfinance into a separate store, hedged with IWM.
+   - One or two tests (ins_all h60, ins_cxo h60), matched placebo, Holm.
+   - Costs about 2 × 25 bp + 2 × 1 bp.
+   - Survivorship bias is a known issue (current tickers only): state it.
+   - Write the ADR, review it, then run once.
+2. **ADR 0013: post-earnings drift.**
+   - Announcement dates: from 8-K item 2.02 in `company_filings` (already stored).
+   - Surprise proxy: the announcement-day abnormal return.
+3. **If a cell is confirmed:** gates 2–3 (portfolio backtest, DSR/PBO), then the hold-out once.
+   - The user turned Smart App Control off on 2026-10-10. The venv, scikit-learn and vectorbt
+     work again: verified `import sklearn, vectorbt`.
 
-**2026-10-07 — intraday study (ADR 0007) in flight. The user chose option (a), hourly with
-Alpaca.**
-- **Credentials and pricing.** The key is in `secrets/alpaca.env`. The user pasted it in chat,
-  so advise regenerating it after the pull. It is a free paper account: historical SIP bars from
-  2016-01-01 only, pages of ~900 bars, ≤ 200 requests/min.
-- **ADR 0007** was reviewed by two agents (stats/look-ahead, data feasibility) and rewritten
-  before any data was pulled. Implementation notes were added before any statistic.
-- **Code** (commits `7c6c708`, `92a337b`, + this one):
-  - `adapters/intraday.py`, `adapters/intraday_store.py` (separate `data/intraday.sqlite`);
-  - queries `events_15min.sql` and `gkg_orgs_15min.sql`;
-  - `core/intraday.py` (universe, hedges), `core/intraday_study.py` (statistics);
-  - `cli/pipelines_intraday.py` (ingests), `cli/pipelines_intraday_study.py` (the study);
-  - commands `ingest-intraday`, `ingest-gdelt-15min`, `intraday-status`, `intraday-study`.
-- **Running in the background** (job tmp logs):
-  - `ingest-intraday`, all ~960 tickers, ~9–14 h, resumable (`ingest_intraday.log`);
-  - `ingest-gdelt-15min events|orgs --execute --budget-gb 2000`, 350 GB, cumulative ≈ $4.6 of
-    the $20 cap (`pull15_*.log`).
-- **If interrupted,** rerun the same commands: ledgers skip done ticker-years and chunks.
-- **Next:**
-  1. Verify the ledgers are complete (`intraday-status`; dry runs show 0 chunks pending).
-  2. Run the full test suite in chunks.
-  3. Freeze a checkout.
-  4. Run `intraday-study` **once** (it refuses a second run).
-  5. Write experiment 0009.
-- **Possible speed-up, not taken:** fetch only Track B stocks whose GDELT spike ever fires. It
-  would change the β sample and the liquidity filter set; decide and document before any
-  outcome.
-
-**2026-10-09 — ADR 0007 done: null (experiment 0009).**
-- **Price pull.** The background job was reaped under memory pressure. The user then ran
-  `ingest-intraday`; it reported 0 left, all 961 × 2016–2025 ticker-years stored (53.9M bars).
-- **Logging change.** Before the run, `intraday-study` was changed to log all trials only after
-  everything is computed (commit `479543f`, which is also the frozen checkout).
-- **Result.** One run: 0 of 18 cells discovered, all means within ±2.3 bp. 18 trials; store
-  total 1,869.
-- **Spend.** October billed 1,883 GB, ≈ $4.5 cumulative of the $20 cap.
-- **No further trial-logging runs** without a new ADR and the user's direction.
-
-**2026-10-09 — ADR 0008 (intraday parameter search) and ADR 0009 (value of foresight) in
-flight.** The user asked whether the parameters were optimized and asked for a foresight study
-("if we knew events earlier").
-
-- **Plans:** both ADRs were written, reviewed (3 blockers, all fixed by amendment) and given
-  implementation notes before any real statistic.
-- **Data:** `events_15min_cat` pulled, 11 chunks, 31M rows, 139 GB. October billed ≈ 2,022 GB,
-  ≈ $5.25 cumulative of the $20 cap.
-- **Code:**
-  - `core/intraday_search.py`, `core/foresight.py`, `cli/pipelines_intraday_search.py`,
-    `cli/pipelines_foresight.py`;
-  - commands `intraday-search` and `foresight` (both once-only, logging at the end);
-  - the size check gives 4.0% rejections at 5%;
-  - placebo loops use value tables, tested equal to the reference loops.
-- **Runs:**
-  - The first search run took > 30 min per cell. It was stopped before logging anything (no J
-    trials), and the orphaned python process was killed by PID.
-  - Rerun from frozen commit `2ef1f90`, log `intraday_search.log`.
-  - Then run `foresight` (same checkout), then write experiments 0010 (search) and 0011
-    (foresight).
-- **Environment:** Windows application control blocks scikit-learn's `murmurhash` DLL
-  (vectorbt/sklearn tests fail). The user must allow it before any backtest.
-
-**2026-10-09 — ADR 0008 and 0009 done.**
-- **ADR 0008 (experiment 0010): null.** 0 of 34 cells discovered and 5,920 trials. No
-  configuration beats costs: the best net t is negative in every cell.
-- **ADR 0009 (experiment 0011):** 220 look-ahead trials.
-  - Positive company spikes: a pre-news drift in discovery that fails confirmation.
-  - Country categories: inconclusive. The freshness rule left ≤ 33 events per cell.
-  - Reverse study: only DM protests follow price shocks.
-- **Trials:** 8,009 in the store, 7,789 counting for DSR. Spend ≈ $5.25 of the $20 cap.
-- **Open, for the user to decide:**
-  - a new pre-registered foresight study for country categories with a looser freshness rule;
-  - closing the project;
-  - another data source.
-- **Environment:** the scikit-learn DLL block (Windows application control) must be lifted before
-  any backtest.
-
-**2026-10-09 — ADR 0010 done (experiment 0012).** The user chose the follow-up study.
-- **Design:** country foresight with first-firing freshness, 144–906 events per cell.
-- **Result:** 0 of 154 discovered (min p 0.015). 128 of 154 cells meet the no-value rule, and
-  the rest are inconclusive at day leads.
-- **Trials:** 8,163 total, 7,789 counting for DSR.
-- **Environment:**
-  - Windows application control now also blocks `.venv/Scripts/python.exe`.
-  - Workaround: base CPython 3.12 (`uv` install) with `PYTHONPATH=src;.venv/Lib/site-packages`.
-    The job tmp scripts `py.sh` and `et_snap.sh` do this.
-  - The user should allow the venv (and scikit-learn's DLL), or recreate it.
-- **Every research line is now closed:**
-  - daily;
-  - intraday at the fixed configuration;
-  - the intraday search;
-  - foresight for company and country news.
-
-**Open question from the user, answered on 2026-10-06 (see the final report): intraday horizons (hours/minutes).** Not tested.
-Points for the answer: GDELT updates every 15 minutes and `DATEADDED` has 15-minute resolution,
-so hour-scale is the finest meaningful horizon (minutes are below GDELT's own latency and belong
-to newswire feeds); free intraday history is short (yfinance 1-minute ≈ 30 days, 1-hour ≈ 730
-days), which would fall mostly inside the hold-out; a usable dev-period test needs a historical
-intraday source (e.g. Alpaca's free IEX minute bars back to ~2016, needs an account/API key from
-the user, or paid Polygon/Databento). Any intraday test needs its own pre-registration (ADR 0007).
-
-**Rejected / lessons this session** (details in the archive): Storage API (403), parallel
-heavy writes, background test runs under memory pressure, stationary-bootstrap max-t with
-block 40 on sparse grids (2× oversized → placebo-date null), spaced confirmation draws (hang and
-oversize → distinct unspaced draws).
+**Open notes.**
+- Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is
+  documented in ADR 0011; no fix is planned (ticker reuse risk).
+- `act_13d` is about 50% activist (audit in ADR 0011): founders, private-equity sponsors and
+  strategic stakes make up the rest.
+- The scripts in the job tmp dir (`py.sh`, `et_snap.sh`, `run_*.sh`) are throwaway. `et_snap.sh`
+  currently uses base CPython plus the venv site-packages; it can go back to the venv launcher.

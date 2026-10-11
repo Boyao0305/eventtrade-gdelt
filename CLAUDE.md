@@ -17,7 +17,10 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
   raise it only as far as the cap allows, and say so in the log.
 - **Pushing to any remote other than `origin` (private `Boyao0305/eventtrade-gdelt`), or pushing
   `main`.** Push `dev` only.
-- **Re-running a once-only test.** `followup --id F1` refuses by design (any F1 trial exists).
+- **Re-running a once-only test.** These refuse by design once their hypothesis has trials:
+  `followup --id F1`, `intraday-study` (I1–I6), `intraday-search` (J), `foresight` (O/R),
+  `foresight-country` (O2), `sec-study` (S1). All of them log only after everything is computed,
+  so a crashed run logs nothing and can simply be rerun.
   Never delete or alter trials to make room — the table is append-only and feeds the DSR count.
 
 ## Traps
@@ -65,3 +68,27 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
   appear only at the end. Use `status` (row counts, BigQuery spend) to watch progress.
 - **Concurrent heavy SQLite writes lock out other writers** (60 s timeout): run `build-dataset`
   for A and B one after the other, never alongside a trial-logging command.
+- **Stores:** `data/eventtrade.sqlite` (main, trials), `data/intraday.sqlite` (Alpaca 15-minute
+  bars, 15-minute GDELT), `data/sec.sqlite` (SEC filings).
+- **Alpaca** (free paper key in `secrets/alpaca.env`): historical SIP bars start on 2016-01-01,
+  with pages of ~900 bars and ≤ 200 requests/min. The IEX feed is useless before 2020.
+- **SEC EDGAR:** the User-Agent must carry the user's email (`config.sec_user_agent`, approved
+  2026-10-10), with ≤ 10 requests/s. The insider data sets give FILING_DATE without a time.
+  Filings after 22:00 (Form 4) or 17:30 (13D) are dated the next day, so the entry is the
+  t+1 open.
+- **`company_tickers.json` is today's ticker → today's CIK.** Holding-company reorganizations
+  (DIS, CI, AVGO, LIN, XOM 2025…) lose earlier filings. Never match by ticker symbol: symbols
+  are reused (pre-2020 IR = Trane).
+- **Look-ahead diagnostics** (ADR 0009/0010) log trials with `params.lookahead = true`.
+  `pipelines.counts_for_dsr` excludes them from DSR's N, and they must never be backtested.
+- **Long background jobs get reaped** when the machine is low on memory and the session is idle
+  (an Alpaca pull was killed). For multi-hour jobs, poll actively, or ask the user to run them in
+  their own terminal. In PowerShell use `--home <path>`: `set VAR=` does nothing there.
+- **Windows Smart App Control** blocked `.venv\Scripts\python.exe` and scikit-learn's `.pyd`
+  from 2026-10-09; the user turned it off on 2026-10-10.
+  - If it comes back, the workaround is base CPython 3.12
+    (`%APPDATA%\uv\python\cpython-3.12-windows-x86_64-none\python.exe`) with
+    `PYTHONPATH=src;.venv/Lib/site-packages`.
+  - scikit-learn, vectorbt and skfolio stay blocked under it.
+- **Before a trial-logging run, a timing-only profile is fine** (stores wrapped so `add_trial` is
+  a no-op, statistics never printed). Printing any outcome statistic before the run is not.
