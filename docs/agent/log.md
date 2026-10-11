@@ -48,6 +48,15 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
    - The user turned Smart App Control off on 2026-10-10. The venv, scikit-learn and vectorbt
      work again: verified `import sklearn, vectorbt`.
 
+**2026-10-10 (later) — ADR 0012 done (experiment 0014): "partial".**
+- **Fresh small/mid caps** (6,764 / 2,698 / 1,137 events): insider buys beat matched comparable
+  dates (p 0.0025), but the absolute 60-day effect is small (+0.4–0.9%). Only CEO/CFO is net
+  positive (+0.14%).
+- **Every cell is negative under the survivorship stress** (f_fail about 10%).
+- **The insider line closes as a standalone strategy.** Trials: 8,185.
+- **Next per the plan:** ADR 0013, post-earnings drift (dates from 8-K item 2.02 in
+  `company_filings`; surprise proxy = announcement-day abnormal return).
+
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is
   documented in ADR 0011; no fix is planned (ticker reuse risk).
