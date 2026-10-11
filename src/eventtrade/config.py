@@ -50,6 +50,11 @@ class Config(BaseModel):
         """ADR 0011: SEC filings store."""
         return self.home / "data" / "sec.sqlite"
 
+    @property
+    def dod_db_path(self) -> Path:
+        """DoD daily contract announcements store."""
+        return self.home / "data" / "dod.sqlite"
+
     # SEC requires a User-Agent with a contact (the user's email, approved 2026-10-10).
     sec_user_agent: str = "eventtrade research boyao0305@gmail.com"
 

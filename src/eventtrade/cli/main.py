@@ -131,6 +131,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                                      lambda cik: sec.company_submissions(client, cik),
                                      lambda ciks, adsh: sec.filing_subject(client, ciks, adsh),
                                      now)
+    if cmd == "ingest-dod":
+        from eventtrade.adapters import dod
+        from eventtrade.adapters.dod_store import DodStore
+        from eventtrade.cli import pipelines_dod as pdod
+
+        wb = dod.WaybackClient()
+        return pdod.ingest_dod(cfg, DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start),
+                               lambda: dod.list_snapshots(wb, echo=print),
+                               lambda ts, url: dod.fetch_article(wb, ts, url), now,
+                               limit=args.limit, relist=args.relist,
+                               fetch_errors=(dod.DodError, OSError, EOFError))
     if cmd == "foresight-country":
         from eventtrade.cli import pipelines_foresight as pfo
 
@@ -239,6 +250,12 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("sec-study", help="ADR 0011: SEC insider/13D event study, once only (S1)")
     sub.add_parser("ingest-sec-extra", help="ADR 0011 amendments 2-3: EDGAR submissions of Track B"
                                             " companies and initial-13D subject CIKs; resumable")
+    s = sub.add_parser("ingest-dod", help="DoD daily contract announcements (Wayback captures of"
+                                          " defense.gov) into data/dod.sqlite; resumable")
+    s.add_argument("--limit", type=int, default=None,
+                   help="fetch at most N articles this run (for a trial run)")
+    s.add_argument("--relist", action="store_true",
+                   help="list the Wayback captures again (default: reuse the cached listing)")
     sub.add_parser("foresight-country", help="ADR 0010: foresight for country categories with"
                                              " first-firing freshness, once only (O2 trials)")
     sub.add_parser("intraday-search", help="ADR 0008: intraday parameter search, 34 cells x 160"
