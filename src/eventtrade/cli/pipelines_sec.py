@@ -146,3 +146,19 @@ def ingest_sec_shares(cfg: Config, sstore: Any, stores: list[Any],
     echo(f"done: shares_out {len(sstore.read('shares_out')):,} rows; {empty} CIK(s) without"
          " a share count this run")
     return OK
+
+
+def ingest_sec_profiles(sstore: Any, ciks: list[str], profile_fn: Callable[[str], Any],
+                        now: Clock, echo: Echo = print) -> int:
+    """ADR 0015 amendment 2 input, resumable: EDGAR profiles (meta + filings incl. Form 25/15,
+    DEFM14A, S-4) of the given CIKs, for the merger/failure classification of issuers with no
+    current listing. Reads no prices."""
+    sstore.init()
+    ciks = sorted({str(c).zfill(10) for c in ciks})
+    done = sstore.pulled("profile")
+    todo = [c for c in ciks if c not in done]
+    echo(f"profiles: {len(ciks)} CIKs, {len(todo)} to pull")
+    for cik in todo:
+        meta, df = profile_fn(cik)
+        sstore.write_profile(meta, df, now())
+    return OK

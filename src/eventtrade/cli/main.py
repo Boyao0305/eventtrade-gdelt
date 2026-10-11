@@ -142,6 +142,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                                lambda ts, url: dod.fetch_article(wb, ts, url), now,
                                limit=args.limit, relist=args.relist,
                                fetch_errors=(dod.DodError, OSError, EOFError))
+    if cmd == "dod-study":
+        import pandas as pd
+
+        from eventtrade.adapters.dod_store import DodStore
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_dod as pdod
+        from eventtrade.cli import pipelines_dod_study as pds
+
+        return pds.dod_study(cfg, store, SqliteStore(cfg.home / "data" / "dodcap.sqlite"),
+                             DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start),
+                             SecStore(cfg.sec_db_path), pd.read_csv(args.map, dtype=str), now)
     if cmd == "ingest-dod-prices":
         import pandas as pd
 
@@ -152,7 +163,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return pdod.ingest_dod_prices(
             cfg, pd.read_csv(args.map, dtype=str), SqliteStore(cfg.home / "data" / "dodcap.sqlite"),
             DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start), _fetch_yf,
-            lambda ts: prices.fetch_splits(ts, cfg.holdout_start), prices.sanity_check)
+            # every split up to today: Yahoo's split-adjusted closes are on today's share basis
+            lambda ts: prices.fetch_splits(ts, datetime.now(UTC).date()), prices.sanity_check)
     if cmd == "ingest-sec-shares":
         import pandas as pd
 
@@ -162,9 +174,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         client = sec.SecClient(cfg.sec_user_agent)
         m = pd.read_csv(args.map, dtype=str)
-        return psec.ingest_sec_shares(cfg, SecStore(cfg.sec_db_path), [],
-                                      lambda cik: sec.shares_outstanding(client, cik), now,
-                                      ciks=sorted(set(m["cik"].dropna())))
+        sst = SecStore(cfg.sec_db_path)
+        rc = psec.ingest_sec_shares(cfg, sst, [],
+                                    lambda cik: sec.shares_outstanding(client, cik), now,
+                                    ciks=sorted(set(m["cik"].dropna())))
+        unlisted = m.loc[m["cik"].notna() & m["ticker_now"].isna(), "cik"]
+        return rc or psec.ingest_sec_profiles(sst, sorted(set(unlisted)),
+                                              lambda cik: sec.company_profile(client, cik), now)
     if cmd == "map-dod":
         from eventtrade.adapters import sec
         from eventtrade.adapters.dod_store import DodStore
@@ -299,6 +315,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="fetch at most N articles this run (for a trial run)")
     s.add_argument("--relist", action="store_true",
                    help="list the Wayback captures again (default: reuse the cached listing)")
+    s = sub.add_parser("dod-study", help="ADR 0015: DoD contract awards, once only (D)")
+    s.add_argument("--map", default="docs/data/dod_issuer_map.csv")
     s = sub.add_parser("ingest-dod-prices", help="ADR 0015 amendment 2: daily prices + splits of"
                                                  " every mapped issuer (data/dodcap.sqlite)")
     s.add_argument("--map", default="docs/data/dod_issuer_map.csv")

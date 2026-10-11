@@ -261,7 +261,8 @@ def shares_outstanding(client: SecClient, cik: str) -> pd.DataFrame:
 
     The cover-page dei:EntityCommonStockSharesOutstanding first; when it has no
     (non-dimensional) fact, as for most multi-class issuers, us-gaap basic weighted-average
-    shares instead. Columns SHARES_COLS; empty if neither concept exists (HTTP 404)."""
+    shares instead. Plus dei:EntityPublicFloat rows (tag 'EntityPublicFloat', val in USD) for
+    the amendment 6 check. Columns SHARES_COLS; empty if no concept exists (HTTP 404)."""
     cik = str(cik).zfill(10)
     for tax, tag in SHARES_TAGS:
         try:
@@ -275,9 +276,23 @@ def shares_outstanding(client: SecClient, cik: str) -> pd.DataFrame:
                 for f in (d.get("units") or {}).get("shares", [])
                 if f.get("val") is not None and (f.get("filed") or "9999") <= SUBMISSIONS_TO]
         if rows:
-            return pd.DataFrame(rows, columns=SHARES_COLS).drop_duplicates() \
-                .sort_values(["filed", "end"]).reset_index(drop=True)
-    return pd.DataFrame(columns=SHARES_COLS)
+            out = pd.DataFrame(rows, columns=SHARES_COLS)
+            break
+    else:
+        out = pd.DataFrame(columns=SHARES_COLS)
+    try:  # public float (USD, as of the end of Q2): the amendment 6 order-of-magnitude check
+        d = client.get(CONCEPT_URL.format(cik=cik, tax="dei", tag="EntityPublicFloat")).json()
+        fl = [(cik, "EntityPublicFloat", f.get("end"), float(f["val"]), f.get("filed"),
+               f.get("form"), f.get("accn"))
+              for f in (d.get("units") or {}).get("USD", [])
+              if f.get("val") is not None and (f.get("filed") or "9999") <= SUBMISSIONS_TO]
+    except SecError as e:
+        if "HTTP 404" not in str(e):
+            raise
+        fl = []
+    if fl:
+        out = pd.concat([out, pd.DataFrame(fl, columns=SHARES_COLS)], ignore_index=True)
+    return out.drop_duplicates().sort_values(["filed", "end"]).reset_index(drop=True)
 
 
 EX21_FORMS = "10-K,10-K405,10-KT"  # EFTS matches root forms, so amendments (10-K/A) come too

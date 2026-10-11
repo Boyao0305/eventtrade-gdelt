@@ -330,13 +330,18 @@ def test_shares_outstanding_falls_back_and_filters_holdout(tmp_path):
         {"end": "2016-04-20", "val": 1000, "filed": "2016-04-28", "form": "10-Q", "accn": "a1"},
         {"end": "2025-04-20", "val": 1100, "filed": "2025-04-28", "form": "10-Q", "accn": "a2"},
     ]}}
-    c, s = _client([_Resp(404), _Resp(200, facts)])
+    flt = {"units": {"USD": [
+        {"end": "2015-06-30", "val": 5e8, "filed": "2016-02-01", "form": "10-K", "accn": "a0"}]}}
+    c, s = _client([_Resp(404), _Resp(200, facts), _Resp(200, flt)])
     df = sec.shares_outstanding(c, "123")
+    assert "EntityPublicFloat" in s.calls[2][0]
+    assert df.loc[df["tag"] == "EntityPublicFloat", "val"].tolist() == [5e8]
+    df = df[df["tag"] != "EntityPublicFloat"]
     assert "dei/EntityCommonStockSharesOutstanding" in s.calls[0][0]
     assert "CIK0000000123" in s.calls[1][0] and "us-gaap" in s.calls[1][0]
     assert df["val"].tolist() == [1000.0] and df["tag"].tolist() == [
         "WeightedAverageNumberOfSharesOutstandingBasic"]
-    c, _ = _client([_Resp(404), _Resp(404)])
+    c, _ = _client([_Resp(404), _Resp(404), _Resp(404)])
     assert sec.shares_outstanding(c, "1").empty
     st = SecStore(tmp_path / "sec.sqlite")
     st.init()

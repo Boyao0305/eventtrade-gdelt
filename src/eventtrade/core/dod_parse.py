@@ -369,3 +369,8 @@ def _city_state(s: str) -> bool:
         return False
     return 2 <= len(words) <= 5 and any(
         " ".join(words[-k:]) in US_STATES and len(words) > k for k in (1, 2))
+
+
+def paragraph_amount(text: str) -> float | None:
+    """The award paragraph's first dollar amount (the parser's `amount`), re-derived from text."""
+    return _amount(text or "")[0]
