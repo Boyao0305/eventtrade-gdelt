@@ -247,6 +247,8 @@ def matched_placebo(events: pd.DataFrame, outcome: pd.DataFrame, strat: pd.DataF
     ticker's dates in its own stratum that have an outcome; an event whose stratum pool is empty
     keeps no placebo (dropped from the draw). p = (1 + #{t_placebo * sign >= t_obs * sign}) /
     (1 + valid draws)."""
+    strat = strat.assign(date=pd.to_datetime(strat["date"]), ticker=strat["ticker"].astype(object))
+    outcome = outcome.assign(date=pd.to_datetime(outcome["date"]))
     have, _ = eventstudy._events_with_outcome(events, outcome)
     have = have.merge(strat, on=["date", "ticker"], how="inner")
     s = eventstudy._series_of(have[["date", "ticker", "value"]], 0, h, cal)

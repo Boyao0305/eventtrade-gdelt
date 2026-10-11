@@ -269,3 +269,57 @@ def test_store_write_subject_none_and_submissions_replace(tmp_path):
     st.write_submissions("c", row, NOW)
     st.write_submissions("c", row, NOW)
     assert len(st.read("company_filings")) == 1 and st.counts()["company_filings"] == 1
+
+
+def test_company_profile_reads_all_pages_keeps_registrations_at_any_date():
+    recent = _page([("r-25", "2025-04-02", "25-NSE", ""),        # hold-out: dropped
+                    ("r-8k", "2025-03-31", "8-K", "1.03"),
+                    ("r-4", "2024-05-01", "4", ""),              # form not kept
+                    ("r-s4", "2023-01-05", "S-4", ""),
+                    ("r-15", "2022-02-01", "15-12B", ""),
+                    ("r-a", "2025-06-01", "8-A12B", "")])        # registration: any date
+    root = {"cik": "1234", "name": "NEWCO INC", "sic": "6770",
+            "formerNames": [{"name": "OLDCO ACQUISITION CORP", "from": "2018-01-02T00:00:00.000Z",
+                             "to": "2021-06-30T00:00:00.000Z"},
+                            {"name": "MIDCO", "from": "2021-06-30T00:00:00.000Z",
+                             "to": "2025-05-01T00:00:00.000Z"},
+                            {"name": "LATECO", "from": "2025-05-01T00:00:00.000Z",
+                             "to": "2025-09-01T00:00:00.000Z"}],
+            "filings": {"recent": recent, "files": [
+                {"name": "CIK0000001234-submissions-001.json", "filingFrom": "1996-01-01",
+                 "filingTo": "2009-12-31"}]}}
+    older = _page([("o-a", "1997-03-01", "8-A12B", ""), ("o-k", "2009-03-01", "10-K", ""),
+                   ("o-g", "1996-05-01", "8-A12G", "")])
+    c, s = _client([_Resp(200, root), _Resp(200, older)])
+    meta, df = sec.company_profile(c, "1234")
+    assert s.calls[0][0] == "https://data.sec.gov/submissions/CIK0000001234.json"
+    assert len(s.calls) == 2  # old pages are fetched too (registrations predate 2015)
+    assert list(df.columns) == sec.SUBMISSION_COLS
+    assert list(df["accession"]) == ["o-g", "o-a", "r-15", "r-s4", "r-8k", "r-a"]
+    assert set(df["cik"]) == {"0000001234"} and df["items"].iloc[-2] == "1.03"
+    assert (df.loc[~df["form"].isin(sec.PROFILE_ANY_DATE), "filing_date"] <= "2025-03-31").all()
+    assert meta["cik"] == "0000001234" and meta["name"] == "NEWCO INC" and meta["sic"] == "6770"
+    assert json.loads(meta["former_names"]) == [
+        {"name": "OLDCO ACQUISITION CORP", "from": "2018-01-02", "to": "2021-06-30"},
+        {"name": "MIDCO", "from": "2021-06-30", "to": None}]  # nothing after 2025-03-31
+
+
+def test_company_profile_without_sic_or_former_names():
+    c, _ = _client([_Resp(200, {"name": "X", "sic": "", "filings": {"recent": _page([])}})])
+    meta, df = sec.company_profile(c, "7")
+    assert meta["sic"] is None and json.loads(meta["former_names"]) == [] and df.empty
+
+
+def test_store_write_profile_replaces_and_records_ledger(tmp_path):
+    st = SecStore(tmp_path / "s.sqlite")
+    st.init()
+    meta = {"cik": "c", "name": "N", "sic": "6770", "former_names": "[]"}
+    rows = pd.DataFrame([["c", "8-A12B", "1999-01-01", "", "a1"],
+                         ["c", "10-K", "2016-03-01", "", "k1"]], columns=sec.SUBMISSION_COLS)
+    assert st.write_profile(meta, rows, NOW) == 2
+    st.write_profile({**meta, "name": "N2"}, rows.iloc[:1], NOW)
+    assert st.read("company_filings2")["accession"].tolist() == ["a1"]
+    m = st.read("company_meta")
+    assert m["name"].tolist() == ["N2"] and m["sic"].tolist() == ["6770"]
+    assert st.pulled("profile") == {"c"} and st.counts()["company_meta"] == 1
+    assert st.read("company_filings").empty  # the ADR 0011 table is untouched

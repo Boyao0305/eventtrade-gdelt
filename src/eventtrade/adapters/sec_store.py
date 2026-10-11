@@ -11,9 +11,15 @@ Tables (raw, as the SEC publishes them; columns lower-cased):
                                              '1.01,9.01') and DEFM14A of universe companies,
                                              2015-01-01..2025-03-31
 - subject_13d(adsh, subject_cik)             header SUBJECT COMPANY CIK of initial 13Ds (NULL: none)
+- company_meta(cik, name, sic, former_names) ADR 0012 issuer identity (former_names: JSON list of
+                                             {name, from, to}; see sec.company_profile)
+- company_filings2(cik, form, filing_date, items, accession)  ADR 0012 profile filings: forms
+                                             sec.PROFILE_FORMS, 8-A12B/8-A12G at any date, others
+                                             2015-01-01..2025-03-31
 - sec_pulls(kind, period, rows, pulled_at)   resume ledger: kind 'insider' (period '2016q1'),
                                              '13d' (period '2016-03'), 'submissions' (period =
-                                             cik) or 'subject13d' (period = adsh)
+                                             cik), 'subject13d' (period = adsh) or 'profile'
+                                             (period = cik)
 """
 
 from __future__ import annotations
@@ -37,6 +43,8 @@ _TABLES = {
     "cik_tickers": ["cik", "ticker", "title"],
     "company_filings": ["cik", "form", "filing_date", "items", "accession"],
     "subject_13d": ["adsh", "subject_cik"],
+    "company_meta": ["cik", "name", "sic", "former_names"],
+    "company_filings2": ["cik", "form", "filing_date", "items", "accession"],
 }
 _DDL = "\n".join(f"CREATE TABLE IF NOT EXISTS {t} ({', '.join(c + ' TEXT' for c in cols)});"
                  for t, cols in _TABLES.items()) + """
@@ -46,6 +54,8 @@ CREATE INDEX IF NOT EXISTS ix_trans_acc ON insider_trans(accession_number);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_13d ON filings_13d(adsh);
 CREATE INDEX IF NOT EXISTS ix_cf_cik ON company_filings(cik, filing_date);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_subject ON subject_13d(adsh);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_meta ON company_meta(cik);
+CREATE INDEX IF NOT EXISTS ix_cf2_cik ON company_filings2(cik, filing_date);
 CREATE TABLE IF NOT EXISTS sec_pulls (kind TEXT NOT NULL, period TEXT NOT NULL,
     rows INTEGER NOT NULL, pulled_at TEXT NOT NULL, PRIMARY KEY (kind, period));
 """
@@ -116,6 +126,21 @@ class SecStore:
             c.execute("INSERT OR REPLACE INTO subject_13d VALUES (?,?)", (adsh, subject_cik))
             c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
                       ("subject13d", adsh, int(subject_cik is not None), _iso(now)))
+
+    def write_profile(self, meta: dict, df: pd.DataFrame, now: datetime) -> int:
+        """Replace one company's meta row and profile filings and record its CIK in the ledger
+        (kind 'profile'), atomically."""
+        cik = meta["cik"]
+        cols = _TABLES["company_filings2"]
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO company_meta VALUES (?,?,?,?)",
+                      tuple(meta[k] for k in _TABLES["company_meta"]))
+            c.execute("DELETE FROM company_filings2 WHERE cik = ?", (cik,))
+            c.executemany(f"INSERT INTO company_filings2 VALUES ({','.join('?' * len(cols))})",
+                          df[cols].itertuples(index=False, name=None))
+            c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
+                      ("profile", cik, len(df), _iso(now)))
+        return len(df)
 
     def read(self, table: str) -> pd.DataFrame:
         cols = _TABLES[table]

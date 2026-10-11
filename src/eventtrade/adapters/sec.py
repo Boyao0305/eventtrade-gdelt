@@ -160,6 +160,53 @@ def company_submissions(client: SecClient, cik: str) -> pd.DataFrame:
         .reset_index(drop=True)
 
 
+PROFILE_FORMS = frozenset({"10-Q", "10-K", "10-Q/A", "10-K/A", "8-K", "DEFM14A", "S-4",
+                           "8-A12B", "8-A12G", "25", "25-NSE", "15-12B", "15-12G", "15-15D"})
+PROFILE_ANY_DATE = frozenset({"8-A12B", "8-A12G"})  # registrations: kept whatever their date
+
+
+def company_profile(client: SecClient, cik: str) -> tuple[dict[str, Any], pd.DataFrame]:
+    """One company's identity and listing history for ADR 0012 (amendments 1 and 3), from the
+    EDGAR submissions API (`filings.recent` and every older page in `filings.files`).
+
+    meta: cik (10 digits), name (current, i.e. 2026 information), sic, former_names (JSON list
+    of {name, from, to}, dates 'YYYY-MM-DD' or None). Hold-out discipline: a former name taken
+    after 2025-03-31 is dropped, and a `to` after 2025-03-31 is stored as None (the name was
+    still in use at the end of the window).
+    filings: columns SUBMISSION_COLS; forms PROFILE_FORMS. 8-A12B/8-A12G are kept at any date
+    (a registration before 2015 tells when the issuer listed); every other form only
+    2015-01-01..2025-03-31, so nothing on/after the hold-out is returned.
+    """
+    cik = str(cik).zfill(10)
+    d = client.get(SUBMISSIONS_URL.format(name=f"CIK{cik}.json")).json()
+    filings = d.get("filings") or {}
+    pages = [filings.get("recent") or {}]
+    pages += [client.get(SUBMISSIONS_URL.format(name=f["name"])).json()
+              for f in filings.get("files") or []]
+    rows = []
+    for p in pages:
+        forms, dates, accs = p.get("form") or [], p.get("filingDate") or [], \
+            p.get("accessionNumber") or []
+        items = p.get("items") or [""] * len(forms)
+        for form, fd, it, acc in zip(forms, dates, items, accs, strict=False):
+            if form in PROFILE_ANY_DATE or \
+                    (form in PROFILE_FORMS and SUBMISSIONS_FROM <= fd <= SUBMISSIONS_TO):
+                rows.append((cik, form, fd, it or "", acc))
+    df = pd.DataFrame(rows, columns=SUBMISSION_COLS)
+    df = df.drop_duplicates("accession").sort_values(["filing_date", "accession"]) \
+        .reset_index(drop=True)
+    former = []
+    for f in d.get("formerNames") or []:
+        start, end = (f.get("from") or "")[:10] or None, (f.get("to") or "")[:10] or None
+        if start and start > SUBMISSIONS_TO:
+            continue  # a name taken on/after the hold-out start
+        former.append({"name": f.get("name"), "from": start,
+                       "to": end if end and end <= SUBMISSIONS_TO else None})
+    meta = {"cik": cik, "name": d.get("name"), "sic": str(d.get("sic") or "") or None,
+            "former_names": json.dumps(former)}
+    return meta, df
+
+
 _SUBJECT_TEXT = re.compile(r"SUBJECT COMPANY:(.*?)(?:FILED BY:|</PRE>|$)", re.DOTALL)
 _SUBJECT_SGML = re.compile(r"<SUBJECT-COMPANY>(.*?)</SUBJECT-COMPANY>", re.DOTALL)
 _CIK_TEXT = re.compile(r"CENTRAL INDEX KEY:\s*(\d+)")

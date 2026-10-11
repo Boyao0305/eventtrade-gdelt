@@ -65,7 +65,8 @@ source_modules = ["eventtrade.cli.pipelines", "eventtrade.cli.pipelines_intraday
                   "eventtrade.cli.pipelines_intraday_search",
                   "eventtrade.cli.pipelines_foresight",
                   "eventtrade.cli.pipelines_sec",
-                  "eventtrade.cli.pipelines_sec_study"]
+                  "eventtrade.cli.pipelines_sec_study",
+                  "eventtrade.cli.pipelines_sec_small"]
 forbidden_modules = ["eventtrade.adapters"]
 
 [[tool.importlinter.contracts]]

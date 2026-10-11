@@ -139,3 +139,28 @@ outcome had been computed.
    - The terciles use the whole period, for events and placebo alike.
    - The price downloads keep their fetch date.
    - SEC folds NYSE American into "NYSE": the exchanges kept are NYSE and Nasdaq.
+
+## Implementation notes (2026-10-10, before any return was computed)
+
+**Data**
+- 2,815 listed issuers (NYSE or Nasdaq, not Track B) with qualifying purchases. Prices for 2,792
+  of them; 23 have no Yahoo data.
+- 5,784 EDGAR profiles (2,815 listed + 2,969 delisted), 3,651 yfinance split rows.
+- **Survivorship is material.** Issuers no longer listed hold about 39% of the qualifying
+  accessions outside Track B (more than half in 2016–2018), so the amendment 1 stress test can
+  decide the verdict.
+
+**Metadata dated after 2025-03-31 is used.** Two kinds, neither of them a return:
+- split dates, because yfinance's close is adjusted for every later split and amendment 2 must
+  undo that;
+- 8-A12B registrations, because a first registration after the window means the issuer was not
+  exchange-listed during it.
+
+**Matching**
+- The 250-day distress stratum needs 250 days of price history, so events in a stock's first
+  year of prices cannot be matched and drop out (recent IPOs).
+- Placebo dates of a stock may fall inside the outcome windows of its other events. That biases
+  the matched test toward the null (conservative). A synthetic test with dense events shows it.
+
+**Scope:** universe, delisted list and splits are stored as snapshot tables in
+`data/smallcap.sqlite` (`small_universe`, `delisted`, `splits`).
