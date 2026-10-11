@@ -29,6 +29,7 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
 | **SEC insider purchases and 13Ds** | **0011 → 0013** | **insider buys: +2% (all) to +3% (CEO/CFO, clusters) vs sector at 60 days, replicated 2016–19 and 2020–25, net of 30 bp; formally not confirmed (Holm: p 0.009 vs 0.0071).** 13D null |
 | Insider purchases, fresh small/mid caps | 0012 → 0014 | partial; net and survivorship-stressed negative |
 | Post-earnings drift (8-K 2.02, return-based surprise) | 0013 → 0015 | null (0/6 discovered) |
+| Scheduled macro announcements on SPY (pre-FOMC, FOMC cycle, CPI/NFP/FOMC days, gaps) | 0014 → 0016 | null (0/5 discovered) |
 
 - **Trials:** 8,182 total, 7,808 counting for DSR. The 374 look-ahead trials (O, O2, R) are
   excluded by `counts_for_dsr`.
@@ -74,6 +75,27 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
   - other 8-K items (5.02 executive departures, 4.02 restatements) on stored `company_filings`.
 
   Both need a new ADR plus review before any data are touched.
+
+**2026-10-11 (later) — ADR 0014 done (experiment 0016): null.**
+- Run once from frozen `e7da840` on SPY 15-minute bars, with the calendar frozen (SHA-256 in the
+  ADR).
+- **0 of 5 discovered:**
+  - pre-FOMC drift +2.6 bp vs placebo +12 bp;
+  - FOMC cycle b +0.8 bp/day;
+  - announcement days +9 vs +7 bp;
+  - gap continuation and statement continuation null.
+- Reported only: CPI/NFP days +16 bp, p 0.14. Power excludes only effects of about 25 bp or more.
+- **Method fix found on synthetic data before the run:**
+  - Placebo draws now include the events' own days (a permutation). The earlier pool-only draws
+    were too narrow when events are a large share of a year × weekday.
+  - ADR 0013's small calm-earnings pool had the same, anti-conservative issue. Its null verdict
+    stands.
+- **Data note:** Alpaca "regular-session" bars continue past 13:00 on NYSE half-days, so the 18
+  half-days were dropped by rule.
+- Trials: 8,196. Spend unchanged.
+- **Next (my choice):** ADR 0015, other 8-K items on stored `company_filings`. Executive
+  departures (5.02) and auditor changes or non-reliance (4.01/4.02) are negative-information
+  events with a short-side prior. Same machinery as ADR 0013, with the permutation-style null.
 
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is

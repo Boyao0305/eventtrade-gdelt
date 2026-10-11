@@ -19,7 +19,8 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
   `main`.** Push `dev` only.
 - **Re-running a once-only test.** These refuse by design once their hypothesis has trials:
   `followup --id F1`, `intraday-study` (I1–I6), `intraday-search` (J), `foresight` (O/R),
-  `foresight-country` (O2), `sec-study` (S1). All of them log only after everything is computed,
+  `foresight-country` (O2), `sec-study` (S1), `sec-small-study` (S2), `earnings-study` (P1),
+  `macro-study` (M). All of them log only after everything is computed,
   so a crashed run logs nothing and can simply be rerun.
   Never delete or alter trials to make room — the table is append-only and feeds the DSR count.
 
@@ -72,6 +73,12 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
   bars, 15-minute GDELT), `data/sec.sqlite` (SEC filings).
 - **Alpaca** (free paper key in `secrets/alpaca.env`): historical SIP bars start on 2016-01-01,
   with pages of ~900 bars and ≤ 200 requests/min. The IEX feed is useless before 2020.
+  - On NYSE 13:00 half-days, the stored "regular-session" bars run to 16:00: those after 13:00
+    are extended hours. `trading_calendar` therefore misses early closes. Use
+    `macro_calendar.NYSE_EARLY_CLOSES`.
+- **Placebo nulls must let event days back into the draw** (a permutation within the stratum).
+  A pool of non-event days only is too narrow when events are a large share of the stratum
+  (ADR 0014 implementation notes).
 - **SEC EDGAR:** the User-Agent must carry the user's email (`config.sec_user_agent`, approved
   2026-10-10), with ≤ 10 requests/s. The insider data sets give FILING_DATE without a time.
   Filings after 22:00 (Form 4) or 17:30 (13D) are dated the next day, so the entry is the
