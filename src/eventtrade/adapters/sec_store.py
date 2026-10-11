@@ -45,6 +45,7 @@ _TABLES = {
     "subject_13d": ["adsh", "subject_cik"],
     "company_meta": ["cik", "name", "sic", "former_names"],
     "company_filings2": ["cik", "form", "filing_date", "items", "accession"],
+    "shares_out": ["cik", "tag", "end", "val", "filed", "form", "accn"],
 }
 _DDL = "\n".join(f"CREATE TABLE IF NOT EXISTS {t} ({', '.join(c + ' TEXT' for c in cols)});"
                  for t, cols in _TABLES.items()) + """
@@ -56,6 +57,7 @@ CREATE INDEX IF NOT EXISTS ix_cf_cik ON company_filings(cik, filing_date);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_subject ON subject_13d(adsh);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_meta ON company_meta(cik);
 CREATE INDEX IF NOT EXISTS ix_cf2_cik ON company_filings2(cik, filing_date);
+CREATE INDEX IF NOT EXISTS ix_shares_cik ON shares_out(cik, filed);
 CREATE TABLE IF NOT EXISTS sec_pulls (kind TEXT NOT NULL, period TEXT NOT NULL,
     rows INTEGER NOT NULL, pulled_at TEXT NOT NULL, PRIMARY KEY (kind, period));
 """
@@ -140,6 +142,17 @@ class SecStore:
                           df[cols].itertuples(index=False, name=None))
             c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
                       ("profile", cik, len(df), _iso(now)))
+        return len(df)
+
+    def write_shares(self, cik: str, df: pd.DataFrame, now: datetime) -> int:
+        """Replace one company's share counts and record its CIK (kind 'shares'), atomically."""
+        cols = _TABLES["shares_out"]
+        with self._conn() as c:
+            c.execute("DELETE FROM shares_out WHERE cik = ?", (cik,))
+            c.executemany(f"INSERT INTO shares_out VALUES ({','.join('?' * len(cols))})",
+                          df[cols].itertuples(index=False, name=None))
+            c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
+                      ("shares", cik, len(df), _iso(now)))
         return len(df)
 
     def read(self, table: str) -> pd.DataFrame:

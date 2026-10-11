@@ -323,3 +323,43 @@ def test_store_write_profile_replaces_and_records_ledger(tmp_path):
     assert m["name"].tolist() == ["N2"] and m["sic"].tolist() == ["6770"]
     assert st.pulled("profile") == {"c"} and st.counts()["company_meta"] == 1
     assert st.read("company_filings").empty  # the ADR 0011 table is untouched
+
+
+def test_shares_outstanding_falls_back_and_filters_holdout(tmp_path):
+    facts = {"units": {"shares": [
+        {"end": "2016-04-20", "val": 1000, "filed": "2016-04-28", "form": "10-Q", "accn": "a1"},
+        {"end": "2025-04-20", "val": 1100, "filed": "2025-04-28", "form": "10-Q", "accn": "a2"},
+    ]}}
+    c, s = _client([_Resp(404), _Resp(200, facts)])
+    df = sec.shares_outstanding(c, "123")
+    assert "dei/EntityCommonStockSharesOutstanding" in s.calls[0][0]
+    assert "CIK0000000123" in s.calls[1][0] and "us-gaap" in s.calls[1][0]
+    assert df["val"].tolist() == [1000.0] and df["tag"].tolist() == [
+        "WeightedAverageNumberOfSharesOutstandingBasic"]
+    c, _ = _client([_Resp(404), _Resp(404)])
+    assert sec.shares_outstanding(c, "1").empty
+    st = SecStore(tmp_path / "sec.sqlite")
+    st.init()
+    assert st.write_shares("0000000123", df, NOW) == 1
+    assert st.write_shares("0000000123", df, NOW) == 1           # replace, not append
+    assert len(st.read("shares_out")) == 1 and st.pulled("shares") == {"0000000123"}
+
+
+def test_ingest_sec_shares_resumes(tmp_path):
+    st = SecStore(tmp_path / "sec.sqlite")
+    st.init()
+    st.write_tickers(pd.DataFrame({"cik": ["0000000001", "0000000002"], "ticker": ["AAA", "BBB"],
+                                   "title": ["A", "B"]}))
+    store = SimpleNamespace(read_assets=lambda: [SimpleNamespace(ticker="AAA"),
+                                                 SimpleNamespace(ticker="BBB")])
+    calls = []
+
+    def fn(cik):
+        calls.append(cik)
+        return pd.DataFrame([[cik, "t", "2016-01-01", 5.0, "2016-02-01", "10-K", "x"]],
+                            columns=sec.SHARES_COLS)
+
+    cfg = Config(home=tmp_path, gcp_key_path=tmp_path / "k.json")
+    assert ps.ingest_sec_shares(cfg, st, [store], fn, lambda: NOW, lambda s: None) == ps.OK
+    assert ps.ingest_sec_shares(cfg, st, [store], fn, lambda: NOW, lambda s: None) == ps.OK
+    assert calls == ["0000000001", "0000000002"]

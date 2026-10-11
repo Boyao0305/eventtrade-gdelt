@@ -118,3 +118,27 @@ def ingest_sec_extra(cfg: Config, sstore: Any, store: Any, submissions_fn: Calla
          f" universe CIKs; subject = first listed CIK in {first}/{len(found)}")
     echo(f"done: company_filings {len(sstore.read('company_filings')):,} rows")
     return OK
+
+
+def ingest_sec_shares(cfg: Config, sstore: Any, stores: list[Any],
+                      shares_fn: Callable[[str], Any], now: Clock, echo: Echo = print) -> int:
+    """ADR 0015 input, resumable: XBRL share counts (filed before the hold-out) of every
+    company in the given price stores' assets (any track) that maps to a CIK. Reads no prices."""
+    sstore.init()
+    tick = sstore.read("cik_tickers")
+    assets = [a for s in stores for a in s.read_assets()]
+    if not assets or tick.empty:
+        echo("missing: assets or the CIK -> ticker map (run load-universe, ingest-sec)")
+        return MISSING
+    ciks = sorted(set(universe_ciks(assets, tick).values()))
+    done = sstore.pulled("shares")
+    todo = [c for c in ciks if c not in done]
+    echo(f"shares: {len(ciks)} CIKs, {len(todo)} to pull")
+    empty = 0
+    for i, cik in enumerate(todo, 1):
+        empty += sstore.write_shares(cik, shares_fn(cik), now()) == 0
+        if i % 200 == 0:
+            echo(f"  {i}/{len(todo)} ({empty} without a share count)")
+    echo(f"done: shares_out {len(sstore.read('shares_out')):,} rows; {empty} CIK(s) without"
+         " a share count this run")
+    return OK

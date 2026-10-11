@@ -248,3 +248,33 @@ def parse_sec_date(s: str) -> date:
         except ValueError:
             continue
     raise ValueError(f"unrecognised SEC date {s!r}")
+
+
+CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/{tax}/{tag}.json"
+SHARES_TAGS = (("dei", "EntityCommonStockSharesOutstanding"),
+               ("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic"))
+SHARES_COLS = ["cik", "tag", "end", "val", "filed", "form", "accn"]
+
+
+def shares_outstanding(client: SecClient, cik: str) -> pd.DataFrame:
+    """ADR 0015: one company's share counts from XBRL company concepts, filed before the hold-out.
+
+    The cover-page dei:EntityCommonStockSharesOutstanding first; when it has no
+    (non-dimensional) fact, as for most multi-class issuers, us-gaap basic weighted-average
+    shares instead. Columns SHARES_COLS; empty if neither concept exists (HTTP 404)."""
+    cik = str(cik).zfill(10)
+    for tax, tag in SHARES_TAGS:
+        try:
+            d = client.get(CONCEPT_URL.format(cik=cik, tax=tax, tag=tag)).json()
+        except SecError as e:
+            if "HTTP 404" in str(e):
+                continue
+            raise
+        rows = [(cik, tag, f.get("end"), float(f["val"]), f.get("filed"), f.get("form"),
+                 f.get("accn"))
+                for f in (d.get("units") or {}).get("shares", [])
+                if f.get("val") is not None and (f.get("filed") or "9999") <= SUBMISSIONS_TO]
+        if rows:
+            return pd.DataFrame(rows, columns=SHARES_COLS).drop_duplicates() \
+                .sort_values(["filed", "end"]).reset_index(drop=True)
+    return pd.DataFrame(columns=SHARES_COLS)
