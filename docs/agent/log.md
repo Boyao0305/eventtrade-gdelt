@@ -27,6 +27,8 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
 | Foresight, company and country, look-ahead diagnostic | 0009 → 0011 | company pre-news drift does not replicate; country underpowered |
 | Foresight, country, first-firing freshness | 0010 → 0012 | null with power (0/154) |
 | **SEC insider purchases and 13Ds** | **0011 → 0013** | **insider buys: +2% (all) to +3% (CEO/CFO, clusters) vs sector at 60 days, replicated 2016–19 and 2020–25, net of 30 bp; formally not confirmed (Holm: p 0.009 vs 0.0071).** 13D null |
+| Insider purchases, fresh small/mid caps | 0012 → 0014 | partial; net and survivorship-stressed negative |
+| Post-earnings drift (8-K 2.02, return-based surprise) | 0013 → 0015 | null (0/6 discovered) |
 
 - **Trials:** 8,182 total, 7,808 counting for DSR. The 374 look-ahead trials (O, O2, R) are
   excluded by `counts_for_dsr`.
@@ -56,6 +58,22 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
 - **The insider line closes as a standalone strategy.** Trials: 8,185.
 - **Next per the plan:** ADR 0013, post-earnings drift (dates from 8-K item 2.02 in
   `company_filings`; surprise proxy = announcement-day abnormal return).
+
+**2026-10-11 — ADR 0013 done (experiment 0015): null.**
+- Run once from frozen `cff10be`: 34,868 earnings days (8-K 2.02), 889 tickers. Timing share
+  before d ≈ 0.23, so the window is close(d−2) → close(d+1). 38% of earnings have |z| ≥ 2.
+- **Discovery: 0 of 6 cells at BH q 0.10** (matched p 0.36–0.89). There was no confirmation.
+- Stocks after negative surprises *rise* (+1.3% at 60 days, the same as after positive ones).
+  That is the survivor drift, which the matched null removes. Secondary big-move p values are
+  low (earnings jumps revert less than other jumps), but they are reported only.
+- Trials: 8,191 (6 P1). Spend unchanged (≈ $5.25 BigQuery; this study used no BigQuery).
+- **Next (my choice, delegated):** single-stock event lines on the S&P 1500 are now exhausted on
+  the free data (GDELT, insiders, 13D, earnings). Candidates not yet tested:
+  - market-level scheduled macro events (FOMC/CPI surprise on SPY/sector ETFs; the user's
+    original intuition);
+  - other 8-K items (5.02 executive departures, 4.02 restatements) on stored `company_filings`.
+
+  Both need a new ADR plus review before any data are touched.
 
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is
