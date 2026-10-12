@@ -249,3 +249,22 @@ price. All review items are adopted; where they conflict with the Decision above
   the period (ADR 0012 classification from EDGAR profiles).
 - **Net:** event average − expected placebo average (the mean of the issuer-year pool means) −
   average round-trip cost.
+
+**Freeze (commit `0afefa7`).** SHA-256 of the git-stored (LF) files:
+
+| File | SHA-256 |
+|---|---|
+| `docs/dod/dod_issuer_map.csv` | `21d3e5f5062394ee01783268557987c83c5f4770b414ff62cb3f1bd9c25694f0` |
+| `docs/dod/dod_exclusions.csv` | `c02e964e6b9b810797c517040df574825b60a681d63a3efd88d3815da1eee595` |
+| `src/eventtrade/core/dod_parse.py` | `8431714f45a5f4ee98823eb728355d945822fc2e0f6cda8c8be30f92d40b76d5` |
+| `src/eventtrade/core/dod_issuers.py` | `4ccfd8c87377af28d25aecc671712a88455002fd90d2c4ca1363a4c1329b2fce` |
+| `src/eventtrade/core/dod_study.py` | `20418d59d5009bde4b98f2162e80cad5d0a327ec266df2ae80644761604d0533` |
+| `docs/dod/dod_audit/amount_audit.csv` | `58b7e69e5720fe5609859f62eb3d48fcb496ca82759054347efbad4062e56c5e` |
+| `docs/dod/dod_audit/id_check.csv` | `8b9878cc9822d833e8072b6d168bf0c45253b05357c327ae6ee48e540ba7bcf5` |
+
+The identity check found 17 wrong pairs out of 345, plus 1 partial (Sikorsky under RTX from
+2015-11-06). They are:
+- 10 name collisions, the biggest being "SAIC" under Leidos (Leidos' pre-2013 name, now the
+  new SAIC);
+- 6 joint ventures the listed company does not control;
+- 1 unit sold before the award.
