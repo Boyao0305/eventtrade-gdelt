@@ -1,0 +1,19 @@
+ticker,awardee_norm,from_date,reason
+ABM,tsay ferguson williams,,"Small-business JV led by tribally owned Tsay Construction (Ohkay Owingeh); ABM's Ferguson-Williams was the non-controlling partner; marked ""Joint Venture"" in ABM FY2013/14 Ex21 and absent from FY2015 Ex21"
+AMRC,hsgs ameresco,,SBA mentor-protege JV with Hannah Solar Government Services (SDVOSB protege must hold >=51% and control); Ameresco is the minority mentor
+AVNT,conexus,,Conexus Inc. of Salt Lake City is a private veteran-owned RTLS/asset-tracking firm (Plexus software for DoD health care); unrelated to Avient (polymers)
+FLR,beyond new horizons,,"Astrion-led JV; Fluor holds 40% (Fluor FY2024 Ex21: Beyond New Horizons, LLC 40.0000 Delaware) - not a controlled subsidiary"
+GCTK,integrity applications,,Name collision: Integrity Applications Inc. of Chantilly VA is a defense IT contractor; GlucoTrack (formerly Integrity Applications Ltd) is an Israeli glucose-monitor maker
+GNTX,gentex,,Name collision: Gentex Corp. of Simpson PA is a private helmet/respiratory maker; GNTX is Gentex Corp of Zeeland MI (auto mirrors)
+HHS,aberdeen,,"Awardee is the City of Aberdeen, Maryland (water/wastewater services for Aberdeen Proving Ground), not Harte-Hanks' Aberdeen Group"
+IRM,iron mountain solutions,,"Name collision: Iron Mountain Solutions Inc. is a Huntsville AL engineering firm, not Iron Mountain Inc (records storage)"
+LDOS,saic,,"Since the Sept 2013 split, ""SAIC"" (McLean/Reston VA) is the new Science Applications International Corp (ticker SAIC); Leidos is the former SAIC parent and no longer uses the name"
+SIG,sterling,,"Awardee is Sterling (Sterling Computers) of North Sioux City SD, a small IT reseller supplying MQ-9 kits; not Signet's Sterling Jewelers"
+TEL,transoceanic cable ship,,"SubCom unit; TE completed the sale of SubCom to Cerberus on 2018-11-05, the award date - no longer in TE's group"
+TISI,team,,Name collision: Team Corp. of Burlington WA is a private vibration-test equipment maker; TEAM INC is a Texas industrial services firm
+TTEK,tetra tech maytag aircraft,,"Contract JV of Tetra Tech with Maytag Aircraft (Mercury Air Group subsidiary, not Tetra Tech); not in TTEK Ex21 (EDGAR full-text search finds no TTEK filing naming it); control not shown"
+TTEK,tetra tech maytag aircraft corp j,,"Contract JV of Tetra Tech with Maytag Aircraft (Mercury Air Group subsidiary, not Tetra Tech); not in TTEK Ex21 (EDGAR full-text search finds no TTEK filing naming it); control not shown"
+VAL,ensco,,ENSCO Inc. of Springfield VA is a private engineering/test-range firm; unrelated to Ensco/Valaris offshore driller
+VVX,high desert support services,,APTIM-led JV; Vectrus/V2X owns 25% and uses the equity method (V2X 10-Q Q1 2024)
+WD,alliant,,Awardee is an environmental consultancy in Knoxville TN (remedial investigation/feasibility study); not Walker & Dunlop's Alliant affordable-housing finance business
+RTX,sikorsky aircraft,2015-11-06,partial: Lockheed Martin closed its purchase of Sikorsky on 2015-11-06; RTX (UTC) awards from that day belong to LMT

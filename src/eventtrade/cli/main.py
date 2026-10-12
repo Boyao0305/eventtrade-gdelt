@@ -152,7 +152,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return pds.dod_study(cfg, store, SqliteStore(cfg.home / "data" / "dodcap.sqlite"),
                              DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start),
-                             SecStore(cfg.sec_db_path), pd.read_csv(args.map, dtype=str), now)
+                             SecStore(cfg.sec_db_path), pd.read_csv(args.map, dtype=str), now,
+                             exclusions=pd.read_csv(args.exclusions, dtype=str))
     if cmd == "ingest-dod-prices":
         import pandas as pd
 
@@ -317,6 +318,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="list the Wayback captures again (default: reuse the cached listing)")
     s = sub.add_parser("dod-study", help="ADR 0015: DoD contract awards, once only (D)")
     s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
+    s.add_argument("--exclusions", default="docs/dod/dod_exclusions.csv",
+                   help="wrong-identity (ticker, awardee_norm) pairs from the ticker check")
     s = sub.add_parser("ingest-dod-prices", help="ADR 0015 amendment 2: daily prices + splits of"
                                                  " every mapped issuer (data/dodcap.sqlite)")
     s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")

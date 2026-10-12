@@ -189,3 +189,63 @@ price. All review items are adopted; where they conflict with the Decision above
     - BH is valid under the cells' positive dependence;
     - the 1% / 0.1% thresholds are fixed a priori from the literature's materiality notion, not
       from this data.
+
+## Implementation notes (2026-10-12, before any return was computed)
+
+**Data.**
+- `ingest-dod`: 2,548 articles with status ok, about 250 a year for 2015–2024, and 36,338 award
+  paragraphs (865 corrections).
+- defense.gov answers scripts with 403, so captures come from the Internet Archive.
+- Two Aug/Sep 2025 articles (hold-out period, no prices) were opened while the parser was being
+  built. They are not used.
+
+**Mapping (amendment 3), frozen in `docs/dod/dod_issuer_map.csv`.**
+- **Blind audit 1 (150 paragraphs):** 11.3% disagreement on the priced ticker, above 10%.
+  Revisions:
+  1. a former name stays valid until the CIK's last filing;
+  2. titles also match without spaces;
+  3. one-word titles own no prefixes;
+  4. a title match to an unlisted CIK defers to a listed Exhibit 21 parent.
+- **A first-word uniqueness rule** was tried in revision 2 and dropped. On sample 1 it created
+  new false matches (e.g. Assured Information Security → Assured Guaranty).
+- **Blind audit 2** (fresh 150): 14.7%. Almost all disagreements were misses; 1 was a wrong
+  priced match (Sikorsky, three weeks after its sale, through the 400-day Exhibit 21 lookback).
+- **Revision 4:** ' - ' and '/' also separate a head from a division, and titles ending in
+  'Holding(s)' also match without it.
+- **Blind audit 3** (fresh 150, evaluated once, then frozen): **8.7%**. Counting the BAE ADR rows
+  as agreement, since ADRs are dropped, it is 6.0%. All are misses; there are 0 wrong priced
+  matches.
+- **Files:** `docs/dod/dod_audit/blind_sample*.csv`, `blind_map*.csv`, `compare_blind.py`.
+
+**Amount audit (amendment 1).** Files: `docs/dod/dod_audit/amount_audit.csv` and
+`ratio_over_50_check.csv`.
+- **Parser error:** 0/200 on the action amount, and 1/47 among issuer-days above 50% of market
+  cap (numbered actions in one paragraph; now summed).
+- **But 40% of paragraphs are ceilings or multi-year totals** (IDIQ maximums, not-to-exceed,
+  D-type contract numbers, funding set per order), including 25 of the 47 rows above 50%.
+- **Decision** (amendment 1: size never uses a ceiling):
+  - ceiling-flagged paragraphs (`dod_study.is_ceiling`) are excluded from size;
+  - multiple-award language ('one of N contracts', 'compete for each order') is excluded;
+  - their counts are reported.
+- **Limitation:** merged multi-award paragraphs keep only the first awardee. The other awards are
+  lost, which biases the result toward zero.
+
+**Identity check (amendment 3).**
+- Every (ticker, awardee) pair behind a candidate event (issuer-day size ≥ 0.1% of market cap)
+  is checked against SEC business descriptions, Exhibit 21 lists and company press releases;
+  no prices or news.
+- Wrong pairs are listed in `docs/dod/dod_exclusions.csv` and dropped.
+
+**Other implementation choices.**
+- **ADRs and foreign ordinary shares** (5-letter OTC symbols ending in Y or F, e.g. BAESY)
+  drop out (amendment 6).
+- **Split history** is fetched up to today. Yahoo's split-adjusted closes are on today's share
+  basis, so undoing them needs post-hold-out splits too. This is corporate-action bookkeeping,
+  not returns.
+- **Market cap** = adjusted close(d−1) × cover-page shares × product of the splits after the
+  cover date.
+- **Public-float check:** `dei:EntityPublicFloat`, with issuers at 100× or more dropped.
+- **Survivorship:** f_fail = failure-classified unlisted issuer-days ÷ all mapped issuer-days in
+  the period (ADR 0012 classification from EDGAR profiles).
+- **Net:** event average − expected placebo average (the mean of the issuer-year pool means) −
+  average round-trip cost.

@@ -38,7 +38,8 @@ SMALL_HEDGE, DEFENSE_HEDGE = "IWM", "ITA"
 
 
 def dod_study(cfg: Config, store: Any, prices: Any, dstore: Any, sstore: Any,
-              map_rows: pd.DataFrame, now: Clock, echo: Echo = print, n_boot: int = N_BOOT) -> int:
+              map_rows: pd.DataFrame, now: Clock, echo: Echo = print, n_boot: int = N_BOOT,
+              exclusions: pd.DataFrame | None = None) -> int:
     if CONFIRMATION[1] >= cfg.holdout_start:
         echo("refused: confirmation reaches the hold-out")
         return REFUSED
@@ -54,7 +55,11 @@ def dod_study(cfg: Config, store: Any, prices: Any, dstore: Any, sstore: Any,
     if awards.empty or map_rows.empty:
         echo("missing: DoD awards or the issuer map (ingest-dod, map-dod)")
         return MISSING
-    rows = ds.award_rows(map_rows, awards)
+    rows = ds.award_rows(map_rows, awards, exclusions)
+    all_rows = ds.award_rows(map_rows, awards, exclusions, with_ceilings=True)
+    echo(f"amount audit rules: {int(all_rows['ceiling'].sum()):,} ceiling paragraphs excluded"
+         f" from size (of {len(all_rows):,}); identity exclusions"
+         f" {0 if exclusions is None else len(exclusions)}")
     days = ds.issuer_days(rows)
     echo(f"awards: {len(awards):,} paragraphs; mapped sole awards with an action amount"
          f" {len(rows):,}; issuer-days {len(days):,} ({days['cik'].nunique()} issuers)")

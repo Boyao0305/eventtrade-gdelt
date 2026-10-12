@@ -10,7 +10,8 @@ from eventtrade.core import dod_study as ds
 MAP = pd.DataFrame({"article_id": ["1", "1", "1", "2", "2"], "seq": ["1", "2", "3", "1", "2"],
                     "cik": ["5", "5", None, "5", "6"],
                     "ticker_now": ["AAA", "AAA", None, "AAA", "BBB"],
-                    "rule": ["title", "ex21", "none", "title", "title"]})
+                    "rule": ["title", "ex21", "none", "title", "title"],
+                    "norm": ["a", "a", "x", "a", "b"]})
 AWARDS = pd.DataFrame({
     "article_id": [1, 1, 1, 2, 2], "seq": [1, 2, 3, 1, 2],
     "release_date": ["2017-03-01", "2017-03-01", "2017-03-01", "2017-03-02", "2017-03-02"],
@@ -79,6 +80,24 @@ def test_cells_decluster_placebo_and_power():
     assert ds.placebo_expectation(ev, pool) == pytest.approx((0.02 - 0.02 + 0.0) / 3)
     assert ds.mde(1, 100) == pytest.approx(2.487 * 0.02 / 10)
     assert ds.underpowered(39, 20) and ds.underpowered(50, 14) and not ds.underpowered(40, 15)
+
+
+def test_amount_audit_rules():
+    two = "X Corp., is awarded (1) A $14,918,000,000 contract ... (2) A $263,000,000 option."
+    assert ds.action_amount(two) == 14_918_000_000 + 263_000_000
+    assert ds.action_amount("X Inc., is awarded a $10,000,000 contract.") == 10e6
+    assert ds.is_ceiling("a $95,000,000 maximum indefinite-delivery contract")
+    assert ds.is_ceiling("Contract N00024-19-D-6200 is awarded")
+    assert not ds.is_ceiling("a $10,000,000 firm-fixed-price contract N00024-19-C-6200")
+    aw = AWARDS.copy()
+    aw.loc[0, "text"] = "A Corp., is awarded a $10,000,000 maximum indefinite-delivery contract."
+    aw.loc[1, "text"] = "A Corp., is awarded a $5 million contract, one of nine contracts awarded."
+    assert ds.award_rows(MAP, aw).empty                                 # ceiling, multi-award
+    assert ds.award_rows(MAP, aw, with_ceilings=True)["amount"].tolist() == [10e6]
+    ex = pd.DataFrame({"ticker": ["AAA"], "awardee_norm": ["a"]})
+    assert ds.award_rows(MAP, AWARDS, exclusions=ex).empty
+    ex = pd.DataFrame({"ticker": ["AAA"], "awardee_norm": ["a"], "from_date": ["2017-03-02"]})
+    assert len(ds.award_rows(MAP, AWARDS, exclusions=ex)) == 2      # 2017-03-01 rows stay
 
 
 def test_foreign_otc():

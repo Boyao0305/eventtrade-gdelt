@@ -27,31 +27,79 @@ FLOAT_LIMIT = 100.0
 SIGMA = {1: 0.02, 5: 0.045, 20: 0.08}   # amendment 11, fixed before outcomes
 MIN_EVENTS, MIN_ISSUERS = 40, 15
 _DEOBLIGATION = re.compile(r"de-?obligat", re.IGNORECASE)
+# amount audit (2026-10-12, 200 paragraphs): 0% parser errors, but 40% ceilings / multi-year
+# totals. Ceiling-flagged paragraphs are excluded from size (amendment 1: never a ceiling).
+CEILING_WORDS = re.compile(
+    r"\b(?:maximum|ceiling(?:[- ]priced)?|not[- ]to[- ]exceed|estimated(?: maximum)? value"
+    r"|requirements contract|blanket purchase agreement|indefinite[- ]delivery"
+    r"|indefinite[- ]quantity)\b"
+    r"|\b(?:work locations? and funding|funding and work locations?) will be determined with"
+    r" each order\b"
+    r"|funds? will be obligated (?:on|against|as) (?:individual )?(?:task |delivery )?orders",
+    re.IGNORECASE)
+CEILING_DTYPE = re.compile(r"\b[A-Z0-9]{6}-?\d{2}-?D-?\d{4}\b")  # IDIQ contract number (D type)
+MULTI_AWARD = re.compile(
+    r"\bone of (?:\w+|\d+) (?:multiple[- ]award )?(?:contracts|awards|BPAs)\b"
+    r"|\bcompete for (?:each |individual |future )?(?:task |delivery )?orders\b"
+    r"|\bcontractor team arrangement\b", re.IGNORECASE)
+_NUMBERED = re.compile(r"\(\d\) An? \$\s?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?", re.IGNORECASE)
 
 
-def award_rows(mapping: pd.DataFrame, awards: pd.DataFrame) -> pd.DataFrame:
+def action_amount(text: str) -> float | None:
+    """The paragraph's action amount: the sum of numbered actions '(1) A $X ... (2) A $Y' when
+    present, else the parser's first dollar amount."""
+    nums = _NUMBERED.findall(text or "")
+    if len(nums) >= 2:
+        return float(sum(float(a.replace(",", "") + (b or "")) for a, b in nums))
+    return paragraph_amount(text)
+
+
+def is_ceiling(text: str) -> bool:
+    """Ceiling / indefinite-delivery language, or a D-type (IDIQ) contract number."""
+    t = text or ""
+    return bool(CEILING_WORDS.search(t) or CEILING_DTYPE.search(t))
+
+
+def award_rows(mapping: pd.DataFrame, awards: pd.DataFrame,
+               exclusions: pd.DataFrame | None = None, with_ceilings: bool = False
+               ) -> pd.DataFrame:
     """Mapped sole-award paragraphs with a positive action amount (amendment 1 exclusions:
-    corrections, de-obligations, no or non-positive amount). Amounts are re-derived from the
-    paragraph text with the current parser. Columns: d, cik, ticker, amount, kind, agency,
-    small_business, article_id, seq, rule."""
+    corrections, de-obligations, no or non-positive amount; after the amount audit also
+    multiple-award language and, unless `with_ceilings`, ceilings). Amounts are re-derived from
+    the paragraph text (`action_amount`). `exclusions` (ticker, awardee_norm): wrong-identity
+    pairs from the ticker check. Columns: d, cik, ticker, amount, kind, agency, small_business,
+    article_id, seq, rule, ceiling."""
     m = mapping[mapping["cik"].notna()].copy()
     m["article_id"] = m["article_id"].astype(int)
     m["seq"] = m["seq"].astype(int)
     a = awards.copy()
     a["article_id"] = a["article_id"].astype(int)
     a["seq"] = a["seq"].astype(int)
-    j = m[["article_id", "seq", "cik", "ticker_now", "rule"]].merge(
+    j = m[["article_id", "seq", "cik", "ticker_now", "rule", "norm"]].merge(
         a[["article_id", "seq", "release_date", "kind", "agency", "small_business", "text"]],
         on=["article_id", "seq"], how="inner")
-    j["amount"] = j["text"].map(paragraph_amount)
+    j["amount"] = j["text"].map(action_amount)
+    txt = j["text"].fillna("")
+    j["ceiling"] = txt.map(is_ceiling)
     keep = (j["kind"] != "correction") & j["amount"].notna() & (j["amount"] > 0) \
-        & ~j["text"].fillna("").str.contains(_DEOBLIGATION)
+        & ~txt.str.contains(_DEOBLIGATION) & ~txt.str.contains(MULTI_AWARD)
+    if not with_ceilings:
+        keep &= ~j["ceiling"]
+    if exclusions is not None and len(exclusions):
+        start = exclusions["from_date"] if "from_date" in exclusions else pd.Series(
+            [""] * len(exclusions), index=exclusions.index)
+        bad = {(t, n): (str(f) if isinstance(f, str) and f else "")
+               for t, n, f in zip(exclusions["ticker"], exclusions["awardee_norm"], start,
+                                  strict=True)}
+        drop = [(t, n) in bad and str(rd)[:10] >= bad[(t, n)]
+                for t, n, rd in zip(j["ticker_now"], j["norm"], j["release_date"], strict=True)]
+        keep &= ~pd.Series(drop, index=j.index)
     j = j[keep].copy()
     j["d"] = pd.to_datetime(j["release_date"])
     j["cik"] = j["cik"].astype(str).str.zfill(10)
     j = j.rename(columns={"ticker_now": "ticker"})
     return j[["d", "cik", "ticker", "amount", "kind", "agency", "small_business", "article_id",
-              "seq", "rule"]].reset_index(drop=True)
+              "seq", "rule", "ceiling"]].reset_index(drop=True)
 
 
 def issuer_days(rows: pd.DataFrame) -> pd.DataFrame:

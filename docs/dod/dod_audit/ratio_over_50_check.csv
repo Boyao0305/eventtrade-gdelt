@@ -1,0 +1,48 @@
+article_id,seq,d,ticker,amount,action_amount,cumulative_amount,obligated_at_award,is_ceiling,kind,fms,is_correction,is_deobligation,negative,parser_ok,note,ratio
+1548567,2,2018-06-12,TVE,7298480,7298480,,0,0,order,0,0,0,0,1,MAPPING ERROR: Tennessee Valley Authority is a federal corporation; TVE is a TVA bond listing (no shares -> ratio inf). Amount correct; task order privately financed,inf
+3987982,1,2024-12-06,ACH,4500000000,4500000000,,,1,option,0,0,0,0,1,"maximum IDIQ, 30-month option period (DLA prime vendor). (mapping OK: CIK 75252 Owens & Minor, now Accendra Health ACH)",4.21
+958500,59,2016-09-28,GCTK,50899933,50899933,,,1,new,0,0,0,0,1,"maximum ceiling, 1yr base + 4 option years. MAPPING ERROR: Integrity Applications (Chantilly VA, DIA contractor) is not GlucoTrack/Integrity Applications (GCTK)",3.48
+3249030,10,2022-12-16,VVX,3950000000,3950000000,,25973,1,new,0,0,0,0,1,maximum IDIQ to 2034 (12 yrs); awardee is a Greenland JV mapped via V2X Exhibit 21,3.47
+2011830,1,2019-11-07,ACH,1125000000,1125000000,,,1,option,0,0,0,0,1,"maximum IDIQ, 30-month option period. (mapping OK: CIK 75252 Owens & Minor, now Accendra Health ACH)",2.73
+2110663,0,2020-03-12,FLR,1775605000,1775605000,,290784372,0,modification,0,0,0,0,1,"amount correct; Naval Nuclear Laboratory M&O funding (cost-plus pass-through), not a ceiling",1.79
+1785615,0,2019-03-14,VVX,547634003,547634003,,211351334,0,modification,0,0,0,0,1,amount correct,1.77
+1239537,7,2017-07-06,OPXS,12447044,12447044,,,1,new,0,0,0,0,1,"maximum IDIQ, 5-year",1.71
+1745521,0,2019-01-31,HII,14917738145,15211932684,,889830279,0,modification,0,0,0,0,0,"PARSER: three actions in one paragraph ($14,917,738,145 + $263,096,868 + $31,097,671); parser took only the first (-1.9%). Two carriers, multi-year to 2032",1.66
+2714840,1,2021-07-30,HDSN,250000000,250000000,,,1,option,1,0,0,0,1,"maximum IDIQ, five-year option period",1.65
+2458827,0,2020-12-29,VVX,882485046,882485046,,882485046,0,new,0,0,0,0,1,"amount correct; 5-year contract, text says fully obligated",1.6
+612901,0,2015-07-29,LDOS,4336822777,4336822777,,35000000,1,new,0,0,0,0,1,"ceiling IDIQ, up to 10-year ordering period",1.51
+706580,1,2016-03-28,VVX,329418640,329418640,,329418640,0,modification,0,0,0,0,1,"amount correct (""$ 329,418,640"" obligated)",1.42
+3773612,0,2024-05-13,NPK,818933454,818933454,,,1,new,0,0,0,0,1,"D contract, funding with each order, 5-year",1.37
+979184,0,2016-10-19,RCKY,101915091,101915091,,,1,new,0,0,0,0,1,maximum IDIQ for life of contract (1yr + 4 options),1.32
+848280,0,2016-07-18,HDSN,148514169,148514169,,,1,new,0,0,0,0,1,"maximum IDIQ, 5yr + 5yr option",1.28
+606876,1,2015-06-23,ESP,66000000,66000000,,,1,new,0,0,0,0,1,"IDIQ, funding with each order, 5-year",1.06
+2289819,0,2020-07-27,VVX,529058476,529058476,,248000000,0,modification,0,0,0,0,1,amount correct,1.01
+1701429,11,2018-11-29,VVX,247852066,247852066,,178019615,0,modification,0,0,0,0,1,amount correct,0.9
+1469995,9,2018-03-19,VVX,385051216,385051216,,43890534,0,modification,0,0,0,0,1,amount correct,0.89
+2183554,0,2020-05-11,UIS,630000000,630000000,,2182983,1,new,0,0,0,0,1,"single-award IDIQ ceiling, 5-year",0.87
+612890,4,2015-07-14,VVX,221012445,221012445,,221012445,0,option,0,0,0,0,1,amount correct,0.87
+2367105,39,2020-09-30,FLR,1120460003,1120460003,,5996652,0,option,0,0,0,0,1,amount correct; NNL M&O annual option,0.86
+2949169,0,2022-02-28,LDOS,11504145491,11504145491,,500,1,new,0,0,0,0,1,"IDIQ ceiling, up to 10 years; minimum guarantee $500",0.84
+3444761,0,2023-06-29,VSEC,565025276,565025276,,43239665,1,new,0,0,0,0,1,"maximum IDIQ, 5-year",0.81
+1129895,0,2017-03-24,AIR,909394297,909394297,,0,1,new,1,0,0,0,1,"requirements contract to 2032 (15 yrs), no funds at award; merged paragraph (UES, LMT $47M, NOC x2, RTX $12.6M also in text)",0.78
+1918406,12,2019-07-26,CVU,65700000,65700000,,3398478,1,new,0,0,0,0,1,ceiling contract to 2030 (11 yrs),0.77
+991634,0,2016-10-31,CACI,1773158264,1773158264,,12126590,1,order,0,0,0,0,1,"ceiling task order, 5-year",0.74
+2628039,0,2021-05-21,NSIT,2560000000,2560000000,,0,1,new,0,0,0,0,1,"BPA ceiling, 5-year ordering period, no funds at award",0.71
+1273544,0,2017-08-09,J,4600000000,4600000000,,4000000,1,new,0,0,0,0,1,"estimated maximum IDIQ; concurrent task order $4,317,327",0.71
+758273,0,2016-05-12,VVX,173756967,173756967,,173756967,0,modification,0,0,0,0,1,amount correct,0.69
+1195854,0,2017-05-26,VVX,212032488,212032488,,212032488,0,modification,0,0,0,0,1,amount correct,0.65
+3178203,6,2022-10-03,DLHC,101234731,101234731,,26627089,1,option,0,0,0,0,1,"BPA master dollar limit (call limit $40M); one of two BPAs to a Deloitte-IBA team arrangement, so not a sole award",0.64
+3513182,0,2023-08-31,LDOS,7900000000,7900000000,,,1,new,0,0,0,0,1,"D contract, funding with each order, 10-year",0.59
+631005,8,2015-11-23,VVX,145515046,145515046,,16053382,0,new,0,0,0,0,1,amount correct,0.58
+3707576,2,2024-03-14,FLR,3800000000,3800000000,,5000000,1,new,0,0,0,0,1,estimated value of 12-year contract; awardee is a JV (Beyond New Horizons LLC),0.58
+606854,4,2015-05-21,VVX,160219917,160219917,,160219917,0,modification,0,0,0,0,1,amount correct,0.58
+606864,0,2015-06-05,HII,3352611760,3352611760,,188031383,0,new,0,0,0,0,1,amount correct; one carrier DD&C to 2022 (multi-year),0.58
+2313931,0,2020-08-14,LMT,62000000000,62000000000,,3881168384,1,new,1,0,0,0,1,"10-year IDIQ ceiling; initial delivery order $4,941,105,246",0.57
+3916067,0,2024-09-24,HII,5798767376,5798767376,,450000000,0,new,0,0,0,0,1,"amount correct; three ships, to 2035 (multi-year)",0.55
+2039244,0,2019-12-12,AMRC,402833556,402833556,,0,0,order,0,0,0,0,1,"task order under a MULTIPLE-AWARD IDIQ (DOE ESPC), privately financed, performance to 2043",0.53
+1720584,4,2018-12-21,VVX,127447882,127447882,,127447882,0,modification,0,0,0,0,1,amount correct,0.53
+2075679,0,2020-02-05,LDOS,7729639286,7729639286,7729639286,,1,new,0,0,0,0,1,estimated IDIQ value incl. all options (to 2028); min guarantee $10M,0.52
+922040,9,2016-08-22,GCTK,8623598,8623598,,680000,0,new,0,0,0,0,1,MAPPING ERROR: Integrity Applications Inc (Chantilly VA) is not GCTK,0.52
+2780513,27,2021-09-17,PESI,39998941,39998941,,39998941,0,new,0,0,0,0,1,amount correct,0.52
+2037058,0,2019-12-10,LDOS,6520000000,6520000000,,,1,new,0,0,0,0,1,"single-award IDIQ ceiling, 10-year",0.51
+2794796,0,2021-09-30,FLR,1163470003,1163470003,,17319192,0,option,0,0,0,0,1,amount correct; NNL M&O annual option,0.5
