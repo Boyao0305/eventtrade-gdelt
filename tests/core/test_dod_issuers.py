@@ -91,8 +91,8 @@ def test_title_match_is_dated():
     assert di.resolve("United Technologies Corp.", d1, TITLES, {}) == (RTX, "title")
     assert di.resolve("United Technologies Corp.", d2, TITLES, {}) == (None, "none")
     assert di.resolve("Raytheon Technologies", d2, TITLES, {}) == (RTX, "title")
-    # before the rename, the distinctive prefix 'raytheon' (Raytheon Co.) owns the name
-    assert di.resolve("Raytheon Technologies", d1, TITLES, {}) == (RAY, "title_prefix")
+    # before the rename: 'raytheon' is shared by two CIKs over time, so no one-word prefix
+    assert di.resolve("Raytheon Technologies", d1, TITLES, {}) == (None, "none")
     assert di.resolve("RTX Corp.", date(2023, 7, 17), TITLES, {}) == (RTX, "title")
     assert di.resolve("RTX Corp.", date(2023, 7, 16), TITLES, {})[1] == "unsearchable"
     assert di.resolve("KBR Inc.", d1, TITLES, {}) == ("0000000001", "title")  # short but exact
@@ -182,7 +182,7 @@ def test_title_prefix():
     assert di.resolve("General Dynamics Land Systems", d, TITLES2, {}) == \
         ("0000000007", "title_prefix")  # the longest title wins
     assert di.resolve("General Dynamics Electric Boat", d, TITLES2, {}) == (GD, "title_prefix")
-    assert di.resolve("Harper Construction Co.", d, TITLES2, {}) == ("0000000008", "title_prefix")
+    assert di.resolve("Harper Construction Co.", d, TITLES2, {}) == (None, "none")  # one word
     assert di.resolve("Pacific Architects and Engineers", d, TITLES2, {}) == (None, "none")
     assert di.resolve("KBR Wyle Services", d, TITLES2, {}) == (None, "none")  # 3 letters
     assert di.resolve("Twin Peaks Logistics", d, TITLES2, {}) == (None, "ambiguous")
@@ -192,12 +192,42 @@ def test_title_prefix():
                           ("general dynamics land systems", GD, "2021-02-08")])
     assert di.resolve("General Dynamics Electric Boat", d, TITLES2, ex21) == (GD, "ex21")
     assert di.resolve("General Dynamics Land Systems", d, TITLES2, ex21) == (None, "ambiguous")
-    # a dead CIK's title is no prefix after its last filing
+    # 'raytheon' is the first word of two CIKs' names (over time): no one-word prefix, ever
     assert di.resolve("Raytheon Missile Systems", date(2019, 6, 1), TITLES2, {}) == \
-        (RAY, "title_prefix")
+        (None, "none")
     assert di.resolve("Raytheon Missile Systems", d, TITLES2, {}) == (None, "none")
     assert not di.prefix_qualifies("american") and not di.prefix_qualifies("global services")
-    assert di.prefix_qualifies("boeing") and di.prefix_qualifies("american water")
+    assert not di.prefix_qualifies("boeing") and di.prefix_qualifies("american water")
+
+
+def test_blind_audit_revisions():
+    """Revisions 1-3 after the blind audit (ADR 0015 amendment 3)."""
+    t = di.build_titles([
+        ("0000000101", "Raytheon Technologies Corp", "2020-04-03", "2023-07-17", "2025-02-01"),
+        ("0000000101", "RTX Corp", "2023-07-17", None, "2025-02-01"),
+        ("0000000102", "L3Harris Technologies Inc", None, None, "2025-02-01"),
+        ("0000000103", "Meridian Corp", None, None, "2025-02-01"),
+        ("0000000104", "Meridian Bioscience Inc", None, None, "2023-01-31"),
+        ("0000000105", "Duke Energy Progress LLC", None, None, "2025-02-01"),
+        ("0000000106", "Duke Energy Corp", None, None, "2025-02-01"),
+    ])
+    d = date(2024, 9, 4)
+    # 1: a former name stays valid until the CIK's last filing
+    assert di.resolve("Raytheon Technologies Corp., doing business as Pratt and Whitney", d, t,
+                      {}) == ("0000000101", "title")
+    # 2: spaces; one-word titles own no prefixes
+    assert di.resolve("L3 Harris Technologies Inc.", d, t, {}) == ("0000000102", "title")
+    assert di.resolve("Meridian Engineering Co.", d, t, {}) == (None, "none")
+    assert di.resolve("L3Harris Space and Airborne Systems", d, t, {}) == (None, "none")
+    # 3: a title match to an unlisted registrant defers to its listed Exhibit 21 parent
+    ex = di.build_ex21([("duke energy progress", "0000000106", "2020-02-20")])
+    listed = frozenset({"0000000101", "0000000102", "0000000103", "0000000106"})
+    assert di.resolve("Duke Energy Progress", date(2020, 4, 30), t, ex, listed=listed) == \
+        ("0000000106", "ex21_parent")
+    assert di.resolve("Duke Energy Progress", date(2020, 4, 30), t, ex) == ("0000000105", "title")
+    assert di.ex21_phrases("Duke Energy Progress", date(2020, 4, 30), t, listed) == [
+        "duke energy progress"]
+    assert di.ex21_phrases("Duke Energy Progress", date(2020, 4, 30), t) == []
 
 
 EX21_HTML = """<html><body><p>SUBSIDIARIES OF GENERAL DYNAMICS</p><table>
@@ -257,3 +287,16 @@ def test_ex21_conflicting_with_a_title_prefix_is_ambiguous():
     ex21 = di.build_ex21([("bae systems ordnance systems", "0000000002", "2017-02-01")])
     assert di.resolve("BAE Systems Ordnance Systems Inc.", _d(2017, 6, 1), titles, ex21) == \
         (None, "ambiguous")
+
+
+def test_revision_4_dash_heads_and_holding_titles():
+    t = di.build_titles([
+        ("0000000201", "Booz Allen Hamilton Holding Corp", None, None, None),
+        ("0000000202", "United Technologies Corp", None, None, None),
+    ])
+    d = date(2016, 12, 23)
+    assert di.resolve("Booz Allen Hamilton Inc.", d, t, {}) == ("0000000201", "title")
+    assert di.resolve("United Technologies Corp. - Pratt and Whitney", d, t, {}) == \
+        ("0000000202", "title_head")
+    assert di.head("Six3 Intelligence Solutions Inc./CACI") == "six3 intelligence solutions"
+    assert di.head("Kellogg Brown & Root Services, Inc.") is None

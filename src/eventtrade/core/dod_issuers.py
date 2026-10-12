@@ -18,9 +18,21 @@ Rules, in order, for one sole-award paragraph (awardee name, release day d):
    Exhibit 21 filed in [d - lookback, d): exactly one distinct filer CIK -> that CIK; several
    -> `ambiguous`.
 6. `title_prefix`: the normalised name starts (at a word boundary) with a title valid at d that
-   is distinctive (>= 2 words not all common/generic, or one uncommon word of >= 6 letters);
-   the longest such title wins; several CIKs at that length -> `ambiguous`.
+   is distinctive (>= 2 words, not all common/generic); the longest such title wins; several
+   CIKs at that length -> `ambiguous`.
 7. `none` otherwise.
+An Exhibit 21 match that conflicts with a prefix match is `ambiguous`.
+
+Revisions after the blind audit (ADR 0015 amendment 3, 11.3% disagreement > 10%):
+1. a former name stays the CIK's until its last filing (DoD keeps using old names);
+2. titles also match with spaces removed ('L3 Harris'); one-word titles are no prefixes at
+   all ('Meridian Engineering' mapped to a bank; a first-word rule tried next mapped 'Assured
+   Information Security' to an insurer and was dropped);
+3. `ex21_parent`: a title match to a CIK without a current ticker (e.g. a subsidiary
+   registrant) defers to the single listed filer whose Exhibit 21 lists the name.
+Revision 4 (after the second blind sample, 14.7%, almost all misses): ' - ' and '/' also
+separate a legal-entity head from a division; titles ending in 'Holding(s)' (>= 3 words) also
+match without it. Evaluated once on a third, untouched blind sample, then frozen.
 Titles are tried for any non-empty, not-all-generic name (so 'KBR Inc.' or '3M Co.' can match
 exactly); only the full-text search and the prefix rule need `searchable`.
 """
@@ -72,6 +84,7 @@ _APOS = re.compile(r"['’`]")
 _NON_ALNUM = re.compile(r"[^0-9a-z]+")
 
 Titles = dict[str, list[tuple[str, date | None, date | None]]]
+_SQUASH = "~"  # extra Titles key: the name without spaces (revision 2)
 Ex21 = dict[str, list[tuple[str, date]]]
 
 
@@ -110,14 +123,19 @@ def normalize(name: str) -> str:
     return " ".join(_strip(_tokens(name)))
 
 
+_HEAD_SPLIT = re.compile(r",|\s[-–—]\s|/")
+
+
 def head(name: str) -> str | None:
-    """Normalised part before the first comma when it ends with a legal suffix and something
-    follows it ('Lockheed Martin Corp., Missiles and Fire Control' -> 'lockheed martin');
-    otherwise None."""
+    """Normalised part before the first comma (or ' - ' / '/', revision 4) when it ends with a
+    legal suffix and something follows it ('Lockheed Martin Corp., Missiles and Fire Control' ->
+    'lockheed martin'; 'United Technologies Corp. - Pratt and Whitney' -> 'united
+    technologies'); otherwise None."""
     s = _DBA.sub("", str(name))
-    if "," not in s:
+    m = _HEAD_SPLIT.search(s)
+    if m is None:
         return None
-    first, rest = s.split(",", 1)
+    first, rest = s[:m.start()], s[m.end():]
     toks = _tokens(first)
     if len(toks) < 2 or toks[-1] not in _SUFFIX_WORDS or not _tokens(rest):
         return None
@@ -182,7 +200,8 @@ def _one(hit: set[str], rule: str) -> tuple[str | None, str] | None:
 def _title_stage(awardee: str, norm: str, d: date, titles: Titles) -> tuple[str | None, str] | None:
     if is_generic(norm):
         return None
-    got = _one(title_ciks(norm, d, titles), "title")
+    got = _one(title_ciks(norm, d, titles), "title") or \
+        _one(title_ciks(_SQUASH + norm.replace(" ", ""), d, titles), "title")
     if got:
         return got
     h = head(awardee)
@@ -191,22 +210,26 @@ def _title_stage(awardee: str, norm: str, d: date, titles: Titles) -> tuple[str 
     return None
 
 
-def ex21_phrases(awardee: str, d: date, titles: Titles) -> list[str]:
+def ex21_phrases(awardee: str, d: date, titles: Titles,
+                 listed: frozenset[str] | set[str] | None = None) -> list[str]:
     """Normalised phrases whose Exhibit 21 entries `resolve` would consult for this awardee at
-    d: [] if a title resolves it (or it is a JV / unsearchable), else the name and its head."""
+    d: [] if a title resolves it to a listed CIK (or `listed` is None and a title resolves it),
+    or it is a JV / unsearchable; else the name and its head."""
     norm = normalize(awardee)
-    if not norm or is_jv(norm) or _title_stage(awardee, norm, d, titles) or not searchable(norm):
+    if not norm or is_jv(norm) or not searchable(norm):
+        return []
+    t = _title_stage(awardee, norm, d, titles)
+    if t and (listed is None or t[0] is None or t[0] in listed):
         return []
     h = head(awardee)
     return [norm] + ([h] if h and h != norm and searchable(h) else [])
 
 
 def prefix_qualifies(title_norm: str) -> bool:
-    """A title distinctive enough to own every name that starts with it."""
+    """A title distinctive enough to own every name that starts with it: >= 2 words, not all
+    common/generic (one-word titles own no prefixes, revision 2)."""
     toks = title_norm.split()
-    if not toks or all(t in COMMON for t in toks):
-        return False
-    return len(toks) >= 2 or sum(ch.isalpha() for ch in toks[0]) >= 6
+    return len(toks) >= 2 and not all(t in COMMON for t in toks)
 
 
 def prefix_ciks(norm: str, d: date, titles: Titles) -> set[str]:
@@ -222,20 +245,28 @@ def prefix_ciks(norm: str, d: date, titles: Titles) -> set[str]:
 
 
 def resolve(awardee: str, d: date, titles: Titles, ex21: Ex21,
-            lookback_days: int = LOOKBACK_DAYS) -> tuple[str | None, str]:
+            lookback_days: int = LOOKBACK_DAYS, listed: frozenset[str] | set[str] | None = None
+            ) -> tuple[str | None, str]:
     """(cik, rule) for one sole awardee on release day d; see the module docstring.
-    `ex21` maps a normalised Exhibit 21 entry to its (filer CIK, file date) list."""
+    `ex21` maps a normalised Exhibit 21 entry to its (filer CIK, file date) list. `listed`:
+    CIKs with a current ticker (revision 3: a title match to an unlisted CIK, e.g. a subsidiary
+    registrant, defers to a listed Exhibit 21 parent)."""
     norm = normalize(awardee)
     if not norm:
         return None, "unsearchable"
     if is_jv(norm):
         return None, "jv"
+    lo = d - timedelta(days=lookback_days)
     got = _title_stage(awardee, norm, d, titles)
     if got:
+        if listed is not None and got[0] is not None and got[0] not in listed:
+            for key in _phrases(awardee, norm):
+                par = {cik for cik, fd in ex21.get(key, ()) if lo <= fd < d and cik in listed}
+                if len(par) == 1:
+                    return next(iter(par)), "ex21_parent"
         return got
     if not searchable(norm):
         return None, "unsearchable"
-    lo = d - timedelta(days=lookback_days)
     prefix = prefix_ciks(norm, d, titles)
     for key in ex21_phrases(awardee, d, titles):
         got = _one({cik for cik, fd in ex21.get(key, ()) if lo <= fd < d}, "ex21")
@@ -245,6 +276,11 @@ def resolve(awardee: str, d: date, titles: Titles, ex21: Ex21,
             return got
     got = _one(prefix, "title_prefix")
     return got or (None, "none")
+
+
+def _phrases(awardee: str, norm: str) -> list[str]:
+    h = head(awardee)
+    return [norm] + ([h] if h and h != norm else [])
 
 
 def build_titles(rows: Iterable[tuple]) -> Titles:
@@ -262,12 +298,16 @@ def build_titles(rows: Iterable[tuple]) -> Titles:
         if not norm or is_generic(norm):
             continue
         start, end = _d(a), _d(b)
-        if last is not None:
-            stop = last + timedelta(days=1)
-            end = stop if end is None else min(end, stop)
+        if last is not None:  # revision 1: a former name stays the CIK's until its last filing
+            end = last + timedelta(days=1)
         if start is not None and end is not None and start >= end:
             continue
-        out.setdefault(norm, []).append((str(cik), start, end))
+        rec = (str(cik), start, end)
+        out.setdefault(norm, []).append(rec)
+        toks = norm.split()
+        if len(toks) >= 3 and toks[-1] in ("holding", "holdings"):  # revision 4: 'booz allen
+            out.setdefault(" ".join(toks[:-1]), []).append(rec)       # hamilton holding' too
+        out.setdefault(_SQUASH + norm.replace(" ", ""), []).append(rec)  # 'l3 harris' = 'l3harris'
     return out
 
 

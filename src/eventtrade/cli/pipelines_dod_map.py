@@ -105,7 +105,9 @@ def map_dod(cfg: Config, sstore: SecStorePort, dstore: DodAwardsPort, names_fn: 
 
     # (c) Exhibit 21: full-text search, then exact entries of each hit document
     titles = _titles(sstore)
-    need = sorted({ph for p in paras for ph in di.ex21_phrases(p["awardee"], p["d"], titles)})
+    listed = frozenset(first_ticker)
+    need = sorted({ph for p in paras
+                   for ph in di.ex21_phrases(p["awardee"], p["d"], titles, listed)})
     done = sstore.pulled("ex21")
     todo = [n for n in need if n not in done]
     echo(f"(c) Exhibit 21 search: {len(need):,} names need it, {len(todo):,} not cached"
@@ -155,7 +157,7 @@ def map_dod(cfg: Config, sstore: SecStorePort, dstore: DodAwardsPort, names_fn: 
     ex21 = di.build_ex21(zip(ent["entry_norm"], ent["cik"], ent["file_date"], strict=True))
     rows = []
     for p in paras:
-        cik, rule = di.resolve(p["awardee"], p["d"], titles, ex21)
+        cik, rule = di.resolve(p["awardee"], p["d"], titles, ex21, listed=listed)
         rows.append({**p, "cik": cik or "", "rule": rule,
                      "ticker_now": first_ticker.get(cik or "", "")})
     rows.sort(key=lambda r: (r["release_date"], int(r["article_id"]), int(r["seq"])))

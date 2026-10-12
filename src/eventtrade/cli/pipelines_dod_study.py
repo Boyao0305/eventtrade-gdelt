@@ -75,6 +75,9 @@ def dod_study(cfg: Config, store: Any, prices: Any, dstore: Any, sstore: Any,
 
     # --- prices, market caps, events (no outcome yet) ---------------------------------------
     listed = days[days["ticker"].notna()].copy()
+    foreign = sorted({t for t in listed["ticker"] if ds.foreign_otc(t)})
+    echo(f"ADR / foreign ordinary tickers dropped (amendment 6): {foreign}")
+    listed = listed[~listed["ticker"].isin(foreign)]
     tickers = sorted(set(listed["ticker"]))
     hedges = sorted(set(iu.SECTOR_SPDR.values()) | {iu.HEDGE_MARKET, SMALL_HEDGE, DEFENSE_HEDGE})
     px = prices.read_prices(tickers + hedges, DEV_START, cfg.holdout_start)

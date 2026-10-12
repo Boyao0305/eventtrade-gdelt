@@ -125,10 +125,11 @@ def market_caps(days: pd.DataFrame, fs: pd.DataFrame, close: pd.DataFrame,
     out = np.full(len(days), np.nan)
     for i, (d, tk, sh, end) in enumerate(zip(days["d"], days["ticker"], sa["shares"], sa["end"],
                                              strict=True)):
-        if pd.isna(sh) or not isinstance(tk, str):
+        if pd.isna(sh) or sh <= 0 or not isinstance(tk, str):
             continue
         c = prev_close(close, tk, d)
-        out[i] = c * sh * split_factor_after(splits.get(tk), end)
+        if c > 0:
+            out[i] = c * sh * split_factor_after(splits.get(tk), end)
     return pd.Series(out, index=days.index)
 
 
@@ -155,6 +156,13 @@ def float_outliers(shares: pd.DataFrame, fs: pd.DataFrame, close: pd.DataFrame,
             worst = max(r, 1 / r)
             out[cik] = max(out.get(cik, 0.0), worst)
     return out
+
+
+def foreign_otc(ticker: str) -> bool:
+    """Amendment 6: OTC ADRs and foreign ordinary shares (5-letter symbols ending in Y or F,
+    e.g. BAESY, CMGMF) drop out."""
+    t = str(ticker).upper()
+    return len(t) == 5 and t.isalpha() and t[-1] in "YF"
 
 
 def cell_of(ratio: np.ndarray) -> np.ndarray:

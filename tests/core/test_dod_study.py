@@ -79,3 +79,8 @@ def test_cells_decluster_placebo_and_power():
     assert ds.placebo_expectation(ev, pool) == pytest.approx((0.02 - 0.02 + 0.0) / 3)
     assert ds.mde(1, 100) == pytest.approx(2.487 * 0.02 / 10)
     assert ds.underpowered(39, 20) and ds.underpowered(50, 14) and not ds.underpowered(40, 15)
+
+
+def test_foreign_otc():
+    assert ds.foreign_otc("BAESY") and ds.foreign_otc("CMGMF")
+    assert not ds.foreign_otc("LMT") and not ds.foreign_otc("GOOGL") and not ds.foreign_otc("XLF")
