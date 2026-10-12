@@ -316,17 +316,17 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--relist", action="store_true",
                    help="list the Wayback captures again (default: reuse the cached listing)")
     s = sub.add_parser("dod-study", help="ADR 0015: DoD contract awards, once only (D)")
-    s.add_argument("--map", default="docs/data/dod_issuer_map.csv")
+    s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
     s = sub.add_parser("ingest-dod-prices", help="ADR 0015 amendment 2: daily prices + splits of"
                                                  " every mapped issuer (data/dodcap.sqlite)")
-    s.add_argument("--map", default="docs/data/dod_issuer_map.csv")
+    s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
     s = sub.add_parser("ingest-sec-shares", help="ADR 0015: XBRL share counts of mapped issuers")
-    s.add_argument("--map", default="docs/data/dod_issuer_map.csv")
+    s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
     s = sub.add_parser("map-dod", help="ADR 0015 amendment 3: map DoD sole awardees to issuer"
                                        " CIKs (EDGAR names, Exhibit 21 search); resumable;"
                                        " reads no prices")
-    s.add_argument("--out", type=Path, default=Path("docs/data/dod_issuer_map.csv"),
-                   help="mapping CSV (default: docs/data/dod_issuer_map.csv, relative to the"
+    s.add_argument("--out", type=Path, default=Path("docs/dod/dod_issuer_map.csv"),
+                   help="mapping CSV (default: docs/dod/dod_issuer_map.csv, relative to the"
                         " current directory)")
     s.add_argument("--limit-names", type=int, default=None, dest="limit_names",
                    help="smoke run: only the N searchable names with the most award dollars")

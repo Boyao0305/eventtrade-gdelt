@@ -1,0 +1,151 @@
+article_id,seq,release_date,awardee,cik,parent_name,reason,source_url
+979184,3,2016-10-19,KPB Architects-Coffman Engineers JV,,KPB Architects + Coffman Engineers joint venture,jv,https://efts.sec.gov/LATEST/search-index?q=%22KPB%20Architects-Coffman%20Engineers%20JV%22&forms=10-K (no SEC registrant parent found)
+2431502,0,2020-12-01,Raytheon Technologies,0000101829,RTX Corp (Raytheon Technologies),registrant,https://data.sec.gov/submissions/CIK0000101829.json
+723570,14,2016-04-18,Brad Hall and Associates Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Brad%20Hall%20and%20Associates%20Inc.%22&forms=10-K (no SEC registrant parent found)
+631299,6,2015-11-25,Raytheon Missile Systems Co.,0001047122,Raytheon Co,parent,https://data.sec.gov/submissions/CIK0001047122.json
+3490188,13,2023-08-10,Black Construction Corp.,0000077543,Tutor Perini Corp,parent,https://www.sec.gov/Archives/edgar/data/77543/000007754324000015/tpc-20231231xex21.htm
+1616111,10,2018-08-29,Booz Allen Hamilton Inc.,0001443646,Booz Allen Hamilton Holding Corp,parent,https://data.sec.gov/submissions/CIK0001443646.json
+3948301,4,2024-10-28,General Dynamics Electric Boat Corp.,0000040533,General Dynamics Corp,parent,https://data.sec.gov/submissions/CIK0000040533.json
+612903,4,2015-07-31,Technology and Supply Management LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Technology%20and%20Supply%20Management%20LLC%22&forms=10-K (no SEC registrant parent found)
+2794796,61,2021-09-30,MILSPRAY,,,private,https://efts.sec.gov/LATEST/search-index?q=%22MILSPRAY%22&forms=10-K (no SEC registrant parent found)
+606839,16,2015-04-30,Tutor Perini Corp.,0000077543,Tutor Perini Corp,registrant,https://data.sec.gov/submissions/CIK0000077543.json
+955895,2,2016-09-26,Raytheon Co.,0001047122,Raytheon Co,registrant,https://data.sec.gov/submissions/CIK0001047122.json
+617474,5,2015-09-16,United Launch Services LLC,,ULA: Boeing/Lockheed 50/50 JV,jv,https://efts.sec.gov/LATEST/search-index?q=%22United%20Launch%20Services%20LLC%22&forms=10-K (no SEC registrant parent found)
+606807,5,2015-03-17,System High Corp.,,,private,https://www.sec.gov/Archives/edgar/data/1047122/000104712220000079/rtn-12312019x10ka.htm
+2593896,2,2021-05-03,Lockheed Martin Corp.,0000936468,Lockheed Martin Corp,registrant,https://data.sec.gov/submissions/CIK0000936468.json
+4116229,7,2025-03-11,Manson Construction Co.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Manson%20Construction%20Co.%22&forms=10-K (no SEC registrant parent found)
+633402,4,2015-12-08,Maersk Line Ltd.,,"A.P. Moller-Maersk, no SEC registration",foreign,https://efts.sec.gov/LATEST/search-index?q=%22Maersk%20Line%20Ltd.%22&forms=10-K (no SEC registrant parent found)
+2287902,9,2020-07-24,DRS Laurel Technologies,,Leonardo SpA (Leonardo DRS registered only from 2021/2022),foreign,https://efts.sec.gov/LATEST/search-index?q=%22DRS%20Laurel%20Technologies%22&forms=10-K (no SEC registrant parent found)
+1566998,8,2018-07-03,Raytheon Missile Systems (RMS),0001047122,Raytheon Co,parent,https://data.sec.gov/submissions/CIK0001047122.json
+3126822,1,2022-08-12,Crowley Government Services Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Crowley%20Government%20Services%20Inc.%22&forms=10-K (no SEC registrant parent found)
+4068227,9,2025-02-14,Minnesota Department of Employment and Economic Development,,state government agency,nonprofit,https://efts.sec.gov/LATEST/search-index?q=%22Minnesota%20Department%20of%20Employment%20and%20Economic%20Development%22&forms=10-K (no SEC registrant parent found)
+620828,40,2015-09-28,Sodexo Management Inc.,,"Sodexo SA, no SEC registration",foreign,https://efts.sec.gov/LATEST/search-index?q=%22Sodexo%20Management%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3427024,11,2023-06-13,NISOU LGC JV II LLC,,,jv,https://efts.sec.gov/LATEST/search-index?q=%22NISOU%20LGC%20JV%20II%20LLC%22&forms=10-K (no SEC registrant parent found)
+3347127,21,2023-03-30,Next Level Relief LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Next%20Level%20Relief%20LLC%22&forms=10-K (no SEC registrant parent found)
+1964752,1,2019-09-18,Range Generation Next LLC,0001047122,Raytheon Co,parent,https://www.sec.gov/Archives/edgar/data/1047122/000104712220000009/rtn-12312019x10k.htm
+1289155,13,2017-08-24,HDR Architectur e Inc.,,HDR employee-owned,private,https://efts.sec.gov/LATEST/search-index?q=%22HDR%20Architectur%20e%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1289155,15,2017-08-24,Raytheon Integrated Defense Systems,0001047122,Raytheon Co,parent,https://data.sec.gov/submissions/CIK0001047122.json
+618197,0,2015-09-22,L-3 Communications Vertex Aerospace LLC,0001056239,L-3 Communications Holdings,parent,https://efts.sec.gov/LATEST/search-index?q=%22Vertex%20Aerospace%22&forms=10-K
+606811,16,2015-03-23,Textron Systems,0000217346,Textron Inc,parent,https://data.sec.gov/submissions/CIK0000217346.json
+1924880,1,2019-08-02,The Boeing Co.,0000012927,Boeing Co,registrant,https://data.sec.gov/submissions/CIK0000012927.json
+3144699,2,2022-08-30,R&M Government Services Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22R%26M%20Government%20Services%20Inc.%22&forms=10-K (no SEC registrant parent found)
+2788736,6,2021-09-24,Chemring Australia Pty Ltd.,,Chemring Group plc,foreign,https://efts.sec.gov/LATEST/search-index?q=%22Chemring%20Australia%20Pty%20Ltd.%22&forms=10-K (no SEC registrant parent found)
+3844604,2,2024-07-19,American Rheinmetall Munition Inc.,,Rheinmetall AG,foreign,https://efts.sec.gov/LATEST/search-index?q=%22American%20Rheinmetall%20Munition%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1658771,5,2018-10-10,Fairbanks Morse LLC,0001164863,EnPro Industries,parent,https://efts.sec.gov/LATEST/search-index?q=%22Fairbanks%20Morse%22&forms=10-K
+4122425,8,2025-03-17,DCS Corp.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22DCS%20Corp.%22&forms=10-K (no SEC registrant parent found)
+3894847,2,2024-09-04,"Raytheon Technologies Corp., doing business as Pratt and Whitney Military Engines",0000101829,RTX Corp (Raytheon Technologies),registrant,https://data.sec.gov/submissions/CIK0000101829.json
+3581601,5,2023-11-06,Innovative Defense Technologies LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Innovative%20Defense%20Technologies%20LLC%22&forms=10-K (no SEC registrant parent found)
+1553468,7,2018-06-18,Allied Pacific Builders Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Allied%20Pacific%20Builders%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3246820,4,2022-12-14,Lockheed Martin Corp.,0000936468,Lockheed Martin Corp,registrant,https://data.sec.gov/submissions/CIK0000936468.json
+2427044,8,2020-11-24,Epic Aviation LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Epic%20Aviation%20LLC%22&forms=10-K (no SEC registrant parent found)
+3819954,2,2024-06-27,Black & Veatch-Jacobs JV,,,jv,https://efts.sec.gov/LATEST/search-index?q=%22Black%20%26%20Veatch-Jacobs%20JV%22&forms=10-K (no SEC registrant parent found)
+3541876,79,2023-09-28,BetterUp Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22BetterUp%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3541876,101,2023-09-28,RMI Titanium Co. LLC,0000004281,Howmet Aerospace,parent,https://efts.sec.gov/LATEST/search-index?q=%22RMI%20Titanium%22&forms=10-K
+1262973,18,2017-07-31,General Dynamics Land Systems,0000040533,General Dynamics Corp,parent,https://data.sec.gov/submissions/CIK0000040533.json
+1434023,7,2018-02-06,Lockheed Martin Space Systems Co.,0000936468,Lockheed Martin Corp,parent,https://data.sec.gov/submissions/CIK0000936468.json
+3067663,5,2022-06-17,"Simmonds Precision Products Inc., a part of Collins Aerospace",0000101829,RTX Corp (Raytheon Technologies),parent,https://efts.sec.gov/LATEST/search-index?q=%22Simmonds%20Precision%22&forms=10-K
+2077018,1,2020-02-06,Toland & Mizell Architects Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Toland%20%26%20Mizell%20Architects%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1656310,5,2018-10-05,"Federal Contracting Inc., doing business as Bryan Construction",,,private,https://efts.sec.gov/LATEST/search-index?q=%22Federal%20Contracting%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1487244,2,2018-04-06,Comtech EF Data,0000023197,Comtech Telecommunications,parent,https://efts.sec.gov/LATEST/search-index?q=%22Comtech%20EF%20Data%22&forms=10-K
+2261436,12,2020-07-06,General Dynamics Land Systems,0000040533,General Dynamics Corp,parent,https://data.sec.gov/submissions/CIK0000040533.json
+621281,112,2015-09-30,CACI Inc. Federal,0000016058,CACI International,parent,https://data.sec.gov/submissions/CIK0000016058.json
+2518088,1,2021-02-26,InDyne Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22InDyne%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1603513,4,2018-08-15,AASKI Technology Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22AASKI%20Technology%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1693147,1,2018-11-16,Labatt Food Service,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Labatt%20Food%20Service%22&forms=10-K (no SEC registrant parent found)
+1650440,11,2018-10-01,Honeywell International Inc.,0000773840,Honeywell International,registrant,https://data.sec.gov/submissions/CIK0000773840.json
+3981180,3,2024-11-29,M M Manufacturing LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22M%20M%20Manufacturing%20LLC%22&forms=10-K (no SEC registrant parent found)
+1989400,1,2019-10-15,Endeavor Robotics Inc.,0000354908,FLIR Systems,parent,https://efts.sec.gov/LATEST/search-index?q=%22Endeavor%20Robotics%22&forms=10-K
+1318702,11,2017-09-20,Newbegin Enterprises Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Newbegin%20Enterprises%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1220673,6,2017-06-20,Tetra Tech/Pond JV,,,jv,https://efts.sec.gov/LATEST/search-index?q=%22Tetra%20Tech/Pond%20JV%22&forms=10-K (no SEC registrant parent found)
+3663674,1,2024-02-01,Group W Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Group%20W%20Inc.%22&forms=10-K (no SEC registrant parent found)
+775633,2,2016-05-18,American K-9 Detection Services LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22American%20K-9%20Detection%20Services%20LLC%22&forms=10-K (no SEC registrant parent found)
+1671864,3,2018-10-24,Northrop Grumman Systems Corp.,0001133421,Northrop Grumman Corp,parent,https://data.sec.gov/submissions/CIK0001133421.json
+3326241,3,2023-03-10,Konecranes Nuclear Equipment and Services LLC,,Konecranes Oyj,foreign,https://efts.sec.gov/LATEST/search-index?q=%22Konecranes%20Nuclear%20Equipment%20and%20Services%20LLC%22&forms=10-K (no SEC registrant parent found)
+2791886,42,2021-09-28,Ranco Construction,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Ranco%20Construction%22&forms=10-K (no SEC registrant parent found)
+3265442,3,2023-01-11,The Aerospace Corp.,,FFRDC,nonprofit,https://efts.sec.gov/LATEST/search-index?q=%22The%20Aerospace%20Corp.%22&forms=10-K (no SEC registrant parent found)
+2454191,17,2020-12-21,Raytheon Missiles and Defense,0000101829,RTX Corp (Raytheon Technologies),parent,https://data.sec.gov/submissions/CIK0000101829.json
+617124,15,2015-09-14,Wegmann USA Inc.,,Krauss-Maffei Wegmann / KNDS,foreign,https://efts.sec.gov/LATEST/search-index?q=%22Wegmann%20USA%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1331599,25,2017-10-02,"QuantiTech, Inc.",,,private,https://efts.sec.gov/LATEST/search-index?q=%22QuantiTech%22&forms=10-K (no SEC registrant parent found)
+976507,3,2016-10-17,Mobil Oil Guam Inc.,,ExxonMobil Guam business believed sold to IP&E (2011); not verified on SEC,private,https://efts.sec.gov/LATEST/search-index?q=%22Mobil%20Oil%20Guam%20Inc.%22&forms=10-K (no SEC registrant parent found)
+2764928,13,2021-09-03,Trace Systems Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Trace%20Systems%20Inc.%22&forms=10-K (no SEC registrant parent found)
+737932,3,2016-04-19,Rolls Royce Marine North America,,Rolls-Royce Holdings plc,foreign,https://efts.sec.gov/LATEST/search-index?q=%22Rolls%20Royce%20Marine%20North%20America%22&forms=10-K (no SEC registrant parent found)
+3679800,6,2024-02-16,Next Tier Concepts Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Next%20Tier%20Concepts%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1454026,20,2018-02-28,Matthews Marine Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Matthews%20Marine%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3042310,10,2022-05-24,Cherokee CRC LLC,,Cherokee Nation Businesses (tribal-owned),private,https://efts.sec.gov/LATEST/search-index?q=%22Cherokee%20CRC%20LLC%22&forms=10-K (no SEC registrant parent found)
+1741001,4,2019-01-25,Northrop Grumman Systems Corp.,0001133421,Northrop Grumman Corp,parent,https://data.sec.gov/submissions/CIK0001133421.json
+4040498,0,2025-01-24,Assured Information Security Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Assured%20Information%20Security%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1369657,3,2017-11-09,Artel LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Artel%20LLC%22&forms=10-K (no SEC registrant parent found)
+2665060,15,2021-06-21,Elite Pacific Construction Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Elite%20Pacific%20Construction%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3841931,0,2024-07-17,Charles Stark Draper Laboratories Inc.,,,nonprofit,https://efts.sec.gov/LATEST/search-index?q=%22Charles%20Stark%20Draper%20Laboratories%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3304381,11,2023-02-21,"Seiler Instrument and Manufacturing Co., Inc.",,,private,https://efts.sec.gov/LATEST/search-index?q=%22Seiler%20Instrument%20and%20Manufacturing%20Co.%22&forms=10-K (no SEC registrant parent found)
+3691213,13,2024-02-29,Textron Systems,0000217346,Textron Inc,parent,https://data.sec.gov/submissions/CIK0000217346.json
+3479250,11,2023-08-01,Ball Aerospace Advanced Technology and Information Solutions,0000009389,Ball Corp,parent,https://data.sec.gov/submissions/CIK0000009389.json
+1750408,3,2019-02-06,General Dynamics NASSCO-Norfolk,0000040533,General Dynamics Corp,parent,https://data.sec.gov/submissions/CIK0000040533.json
+2958125,5,2022-03-07,AECOM Technical Services Inc.,0000868857,AECOM,parent,https://data.sec.gov/submissions/CIK0000868857.json
+3169379,23,2022-09-23,Sauer Construction LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Sauer%20Construction%20LLC%22&forms=10-K (no SEC registrant parent found)
+1266936,11,2017-08-03,URS Federal Services Inc.,0000868857,AECOM,parent,https://efts.sec.gov/LATEST/search-index?q=%22URS%20Federal%20Services%22&forms=10-K
+615437,2,2015-08-31,"Raytheon Co., Integrated Defense Systems",0001047122,Raytheon Co,registrant,https://data.sec.gov/submissions/CIK0001047122.json
+1316834,13,2017-09-19,Meggitt Polymers & Composites,,Meggitt plc,foreign,https://efts.sec.gov/LATEST/search-index?q=%22Meggitt%20Polymers%20%26%20Composites%22&forms=10-K (no SEC registrant parent found)
+1481376,32,2018-03-30,McRae Industries Inc.,,McRae Industries deregistered 2005,private,https://data.sec.gov/submissions/CIK0000729284.json
+2714840,2,2021-07-30,Varec Inc.,0001336920,Leidos Holdings,parent,https://www.sec.gov/Archives/edgar/data/1336920/000133692022000007/ldos12312021ex21.htm
+2364180,42,2020-09-28,Aviall Services Inc.,0000012927,Boeing Co,parent,https://efts.sec.gov/LATEST/search-index?q=%22Aviall%20Services%22&forms=10-K
+1966024,20,2019-09-19,Dawson Enterprises LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Dawson%20Enterprises%20LLC%22&forms=10-K (no SEC registrant parent found)
+1790554,10,2019-03-20,"Freeman Holdings of Louisiana LLC, doing business as Million Air Lake Charles",,,private,https://efts.sec.gov/LATEST/search-index?q=%22Freeman%20Holdings%20of%20Louisiana%20LLC%22&forms=10-K (no SEC registrant parent found)
+1612374,2,2018-08-24,Berry Aviation Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Berry%20Aviation%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1279412,3,2017-08-15,Insitu Inc.,0000012927,Boeing Co,parent,https://efts.sec.gov/LATEST/search-index?q=%22Insitu%22&forms=10-K
+2790164,55,2021-09-27,Leidos Inc.,0001336920,Leidos Holdings,parent,https://data.sec.gov/submissions/CIK0001336920.json
+752746,4,2016-05-05,Austal USA,,Austal Ltd (ASX),foreign,https://efts.sec.gov/LATEST/search-index?q=%22Austal%20USA%22&forms=10-K (no SEC registrant parent found)
+2171906,11,2020-04-30,Huntington Ingalls Industries,0001501585,Huntington Ingalls Industries,registrant,https://data.sec.gov/submissions/CIK0001501585.json
+2171906,18,2020-04-30,Duke Energy Progress,0001326160,Duke Energy Corp [Duke Energy Progress LLC is itself an SEC filer (CIK 0000017797); ultimate parent Duke Energy Corp given],parent,https://data.sec.gov/submissions/CIK0000017797.json
+3509464,2,2023-08-29,General Atomics Aeronautical Systems Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22General%20Atomics%20Aeronautical%20Systems%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1802502,19,2019-04-01,CDW Government LLC,0001402057,CDW Corp,parent,https://efts.sec.gov/LATEST/search-index?q=%22CDW%20Government%22&forms=10-K
+682238,13,2016-02-29,Rockwell Collins Inc.,0001137411,Rockwell Collins Inc,registrant,https://data.sec.gov/submissions/CIK0001137411.json
+2911544,1,2022-01-25,MAG Aerospace,,,private,https://efts.sec.gov/LATEST/search-index?q=%22MAG%20Aerospace%22&forms=10-K (no SEC registrant parent found)
+1848882,9,2019-05-15,EMR Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22EMR%20Inc.%22&forms=10-K (no SEC registrant parent found)
+2196425,3,2020-05-22,Diversified Construction of Oklahoma Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Diversified%20Construction%20of%20Oklahoma%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1943009,10,2019-08-23,B&H International LLC,,,private,https://efts.sec.gov/LATEST/search-index?q=%22B%26H%20International%20LLC%22&forms=10-K (no SEC registrant parent found)
+2773130,13,2021-09-13,HTL-STREFA,,HTL-Strefa (Poland),foreign,https://efts.sec.gov/LATEST/search-index?q=%22HTL-STREFA%22&forms=10-K (no SEC registrant parent found)
+3345420,1,2023-03-29,Raytheon Missiles & Defense,0000101829,RTX Corp (Raytheon Technologies),parent,https://data.sec.gov/submissions/CIK0000101829.json
+1765547,3,2019-02-22,CK Power,,,private,https://efts.sec.gov/LATEST/search-index?q=%22CK%20Power%22&forms=10-K (no SEC registrant parent found)
+1646068,5,2018-09-26,Torch Technologies Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Torch%20Technologies%20Inc.%22&forms=10-K (no SEC registrant parent found)
+2153211,6,2020-04-16,Akima Logistics Services LLC,,Akima (NANA Alaska Native corporation),private,https://efts.sec.gov/LATEST/search-index?q=%22Akima%20Logistics%20Services%20LLC%22&forms=10-K (no SEC registrant parent found)
+2360802,18,2020-09-24,General Electric Co.,0000040545,General Electric Co,registrant,https://data.sec.gov/submissions/CIK0000040545.json
+1541552,7,2018-06-05,The Design Knowledge Co.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22The%20Design%20Knowledge%20Co.%22&forms=10-K (no SEC registrant parent found)
+3357685,3,2023-04-10,Accura Engineering and Consulting Services,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Accura%20Engineering%20and%20Consulting%20Services%22&forms=10-K (no SEC registrant parent found)
+1777799,8,2019-03-06,Raytheon Missile Systems,0001047122,Raytheon Co,parent,https://data.sec.gov/submissions/CIK0001047122.json
+1327363,40,2017-09-27,American Petroleum Tankers LLC,0001506307,Kinder Morgan Inc,parent,https://efts.sec.gov/LATEST/search-index?q=%22American%20Petroleum%20Tankers%22&forms=10-K
+698223,5,2016-03-18,Northrop Grumman Information Systems,0001133421,Northrop Grumman Corp,parent,https://data.sec.gov/submissions/CIK0001133421.json
+4121138,10,2025-03-14,"Conrad Shipyard, LLC",,Conrad Industries deregistered (last SEC filing 2004),private,https://efts.sec.gov/LATEST/search-index?q=%22Conrad%20Shipyard%22&forms=10-K (no SEC registrant parent found)
+3893110,7,2024-09-03,Northrop Grumman Systems Corp.,0001133421,Northrop Grumman Corp,parent,https://data.sec.gov/submissions/CIK0001133421.json
+1973911,102,2019-09-27,BAE Systems Ordance Systems Inc.,,BAE Systems plc,foreign,https://efts.sec.gov/LATEST/search-index?q=%22BAE%20Systems%20Ordance%20Systems%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3624785,2,2023-12-21,Bechtel Plant Machinery Inc.,,Bechtel,private,https://efts.sec.gov/LATEST/search-index?q=%22Bechtel%20Plant%20Machinery%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3531190,4,2023-09-19,Modern Technology Solutions Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Modern%20Technology%20Solutions%20Inc.%22&forms=10-K (no SEC registrant parent found)
+3172203,4,2022-09-27,"Lockheed Martin, Rotary and Missions Systems",0000936468,Lockheed Martin Corp,parent,https://data.sec.gov/submissions/CIK0000936468.json
+1604905,5,2018-08-16,Metson Marine Services Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Metson%20Marine%20Services%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1948303,8,2019-08-29,Lockheed Martin Global Inc.,0000936468,Lockheed Martin Corp,parent,https://data.sec.gov/submissions/CIK0000936468.json
+1948303,13,2019-08-29,Meridian Engineering Co.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Meridian%20Engineering%20Co.%22&forms=10-K (no SEC registrant parent found)
+606766,2,2015-01-13,Northrop Grumman Technical Services,0001133421,Northrop Grumman Corp,parent,https://data.sec.gov/submissions/CIK0001133421.json
+1440855,0,2018-02-13,Coastal Pacific Food Distributors,,,private,https://www.sec.gov/Archives/edgar/data/877422/000156459019004916/sptn-10k_20181229.htm
+1440855,1,2018-02-13,Food Services Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Food%20Services%20Inc.%22&forms=10-K (no SEC registrant parent found)
+1861753,11,2019-05-30,Parker Hannifin Corp.,0000076334,Parker-Hannifin Corp,registrant,https://data.sec.gov/submissions/CIK0000076334.json
+693156,6,2016-03-14,The Charles Stark Draper Laboratory,,,nonprofit,https://efts.sec.gov/LATEST/search-index?q=%22The%20Charles%20Stark%20Draper%20Laboratory%22&forms=10-K (no SEC registrant parent found)
+1968631,32,2019-09-23,BAE Systems Information and Electronic Systems Integration Inc.,,BAE Systems plc,foreign,https://efts.sec.gov/LATEST/search-index?q=%22BAE%20Systems%20Information%20and%20Electronic%20Systems%20Integration%20Inc.%22&forms=10-K (no SEC registrant parent found)
+4066078,7,2025-02-13,Select Engineering Services,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Select%20Engineering%20Services%22&forms=10-K (no SEC registrant parent found)
+1197079,0,2017-05-30,Philadelphia Gear Corp. (a brand of Timken Gears and Services Inc.),0000098362,Timken Co,parent,https://efts.sec.gov/LATEST/search-index?q=%22Philadelphia%20Gear%22&forms=10-K
+606814,9,2015-03-26,Stantec Consulting Services Inc,0001131383,Stantec Inc (40-F filer),parent,https://data.sec.gov/submissions/CIK0001131383.json
+2954546,3,2022-03-03,Lockheed Martin Corp.,0000936468,Lockheed Martin Corp,registrant,https://data.sec.gov/submissions/CIK0000936468.json
+2954546,6,2022-03-03,Trans-Packers Services Corp.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Trans-Packers%20Services%20Corp.%22&forms=10-K (no SEC registrant parent found)
+612902,12,2015-07-30,Lockheed Martin Corp.,0000936468,Lockheed Martin Corp,registrant,https://data.sec.gov/submissions/CIK0000936468.json
+652380,1,2016-02-08,Electric Boat Corp.,0000040533,General Dynamics Corp,parent,https://data.sec.gov/submissions/CIK0000040533.json
+1702589,1,2018-11-30,Bechtel Plant Machinery Inc.,,Bechtel,private,https://efts.sec.gov/LATEST/search-index?q=%22Bechtel%20Plant%20Machinery%20Inc.%22&forms=10-K (no SEC registrant parent found)
+2676201,3,2021-06-29,Textron Aviation Defense LLC,0000217346,Textron Inc,parent,https://data.sec.gov/submissions/CIK0000217346.json
+3848615,3,2024-07-24,Chromalloy Gas Turbine LLC (Chromalloy),,"Chromalloy (Sequa, PE-owned)",private,https://efts.sec.gov/LATEST/search-index?q=%22Chromalloy%20Gas%20Turbine%20LLC%22&forms=10-K (no SEC registrant parent found)
+2225212,7,2020-06-18,Honeywell International Inc.,0000773840,Honeywell International,registrant,https://data.sec.gov/submissions/CIK0000773840.json
+2405436,2,2020-11-04,Raytheon Co.,0000101829,RTX Corp (Raytheon Technologies),parent,https://data.sec.gov/submissions/CIK0000101829.json
+703910,14,2016-03-24,Lockheed Martin Mission Systems and Training,0000936468,Lockheed Martin Corp,parent,https://data.sec.gov/submissions/CIK0000936468.json
+703910,18,2016-03-24,Lancair Corp.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Lancair%20Corp.%22&forms=10-K (no SEC registrant parent found)
+3513182,15,2023-08-31,Raytheon Missiles and Defense,0000101829,RTX Corp (Raytheon Technologies),parent,https://data.sec.gov/submissions/CIK0000101829.json
+3585521,5,2023-11-09,Northrop Grumman Systems Corp,0001133421,Northrop Grumman Corp,parent,https://data.sec.gov/submissions/CIK0001133421.json
+2820446,0,2021-10-22,L3 Harris Technologies Inc.,0000202058,L3Harris Technologies,registrant,https://data.sec.gov/submissions/CIK0000202058.json
+3250459,19,2022-12-19,Ernst and Young LLP,,,private,https://efts.sec.gov/LATEST/search-index?q=%22Ernst%20and%20Young%20LLP%22&forms=10-K (no SEC registrant parent found)
+3160329,21,2022-09-15,KOAM Engineering Systems Inc.,,,private,https://efts.sec.gov/LATEST/search-index?q=%22KOAM%20Engineering%20Systems%20Inc.%22&forms=10-K (no SEC registrant parent found)
