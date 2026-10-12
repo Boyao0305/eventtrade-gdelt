@@ -30,6 +30,7 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
 | Insider purchases, fresh small/mid caps | 0012 → 0014 | partial; net and survivorship-stressed negative |
 | Post-earnings drift (8-K 2.02, return-based surprise) | 0013 → 0015 | null (0/6 discovered) |
 | Scheduled macro announcements on SPY (pre-FOMC, FOMC cycle, CPI/NFP/FOMC days, gaps) | 0014 → 0016 | null (0/5 discovered) |
+| DoD contract awards ≥ 0.1% / ≥ 1% of market cap | 0015 → 0017 | null (0/6; material awards +1.5% vs +0.7% over 20 d, p 0.12) |
 
 - **Trials:** 8,182 total, 7,808 counting for DSR. The 374 look-ahead trials (O, O2, R) are
   excluded by `counts_for_dsr`.
@@ -126,6 +127,30 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
     exploring HTML structure. They are not used.
   - My first defense.gov probe carried the user's email in its User-Agent. Non-SEC requests
     don't anymore.
+
+**2026-10-12 — ADR 0015 done (experiment 0017): null.**
+- Run once from frozen `6e58316`. The map, exclusions, parser and core are hashed in the ADR.
+- **Before the run:**
+  - three blind mapping audits (11.3% → 14.7% → 8.7% on fresh samples, then frozen);
+  - an amount audit (0 parser errors, 40% ceilings → excluded from size);
+  - an identity check (17 wrong pairs + 1 partial excluded).
+- **Result: 0 of 6 discovered.** Material awards go the expected way (+0.18% at 1 day, +1.5%
+  over 20 days vs about half that on ordinary days, p 0.12). Moderate awards show nothing.
+- **Float check:** it dropped 7 issuers at about 1,000× (XBRL floats likely in thousands),
+  including KTOS and WWD. That is a limitation, not rerunnable.
+- Trials: 8,202. Spend unchanged.
+
+**Where the research stands (2026-10-12).**
+- Nine pre-registered lines are null, or fail costs or confirmation: GDELT (daily, themes,
+  intraday, search, foresight), SEC insiders/13D, small-cap insiders, PEAD, macro announcements
+  and DoD awards.
+- Free, timely public event data has not produced a tradable edge after costs in 2016–2025.
+- **Remaining options need the user:**
+  1. paid data (consensus estimates for surprise-based PEAD and macro surprises; options data
+     for volatility around events), beyond the $20 cap;
+  2. a different objective, e.g. volatility or risk timing around scheduled events instead of
+     direction;
+  3. stop and keep the infrastructure.
 
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is

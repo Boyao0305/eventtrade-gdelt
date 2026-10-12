@@ -20,7 +20,7 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
 - **Re-running a once-only test.** These refuse by design once their hypothesis has trials:
   `followup --id F1`, `intraday-study` (I1–I6), `intraday-search` (J), `foresight` (O/R),
   `foresight-country` (O2), `sec-study` (S1), `sec-small-study` (S2), `earnings-study` (P1),
-  `macro-study` (M). All of them log only after everything is computed,
+  `macro-study` (M), `dod-study` (D). All of them log only after everything is computed,
   so a crashed run logs nothing and can simply be rerun.
   Never delete or alter trials to make room — the table is append-only and feeds the DSR count.
 
@@ -76,6 +76,14 @@ Read `convention.md` (how the repo is organised) and `docs/adr/0001-preregistrat
   - On NYSE 13:00 half-days, the stored "regular-session" bars run to 16:00: those after 13:00
     are extended hours. `trading_calendar` therefore misses early closes. Use
     `macro_calendar.NYSE_EARLY_CLOSES`.
+- **DoD (ADR 0015):**
+  - defense.gov returns 403 to scripts, so `ingest-dod` reads Internet Archive captures.
+  - Award amounts are often IDIQ ceilings (40%); use `dod_study.is_ceiling`.
+  - XBRL `EntityPublicFloat` is sometimes tagged in thousands, so check units before any
+    float-based sanity rule.
+  - `docs/data/` is git-ignored (the `data/` rule), so committed metadata lives in
+    `docs/dod/`.
+  - Do not put the user's email in non-SEC requests.
 - **Placebo nulls must let event days back into the draw** (a permutation within the stratum).
   A pool of non-event days only is too narrow when events are a large share of the stratum
   (ADR 0014 implementation notes).
