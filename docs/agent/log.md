@@ -152,6 +152,19 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
      direction;
   3. stop and keep the infrastructure.
 
+**2026-10-15 — ADR 0016 done (experiment 0018): value of foresight.**
+- Requested by the user ("pretend that we know the event in advance").
+- 22 look-ahead trials (U, excluded from DSR). Trials: 8,224.
+- **Knowing that or when an event happens:** no value. There is no pre-earnings drift in the
+  surprise direction. DoD awards move their stock ≤ 0.2% overnight. Insider buys move it
+  0.05–0.23% between trade and filing. All of these are below costs.
+- **Knowing the direction:**
+  - Earnings reactions average 4.4–4.8% (2–3× ordinary days), so a sign forecaster breaks even
+    at about 53–55% |R|-weighted accuracy.
+  - Macro and FOMC moves are small: q* about 0.52, with few events.
+- **Implied next line:** forecast the earnings-reaction sign from alternative data before the
+  announcement. It needs a data choice from the user (free proxies vs paid).
+
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is
   documented in ADR 0011; no fix is planned (ticker reuse risk).
