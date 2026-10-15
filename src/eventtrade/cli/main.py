@@ -142,6 +142,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                                lambda ts, url: dod.fetch_article(wb, ts, url), now,
                                limit=args.limit, relist=args.relist,
                                fetch_errors=(dod.DodError, OSError, EOFError))
+    if cmd == "foresight-ub":
+        import pandas as pd
+
+        from eventtrade.adapters.dod_store import DodStore
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_dod as pdod
+        from eventtrade.cli import pipelines_foresight_ub as pfu
+
+        return pfu.foresight_ub(cfg, store, SecStore(cfg.sec_db_path), _istore(cfg),
+                                DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start),
+                                SqliteStore(cfg.home / "data" / "dodcap.sqlite"),
+                                pd.read_csv("docs/dod/dod_issuer_map.csv", dtype=str),
+                                pd.read_csv("docs/dod/dod_exclusions.csv", dtype=str), now)
     if cmd == "dod-study":
         import pandas as pd
 
@@ -316,6 +329,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="fetch at most N articles this run (for a trial run)")
     s.add_argument("--relist", action="store_true",
                    help="list the Wayback captures again (default: reuse the cached listing)")
+    sub.add_parser("foresight-ub", help="ADR 0016: value of foresight (look-ahead diagnostic),"
+                                        " once only (U)")
     s = sub.add_parser("dod-study", help="ADR 0015: DoD contract awards, once only (D)")
     s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
     s.add_argument("--exclusions", default="docs/dod/dod_exclusions.csv",

@@ -82,7 +82,8 @@ def qualifying_accessions(subs: pd.DataFrame, owners: pd.DataFrame, trans: pd.Da
     t["value"] = t["shares"] * t["price"]
     acc = t.groupby("accession_number").agg(ticker=("ticker", "first"),
                                             filing_date=("filing_date", "first"),
-                                            value=("value", "sum")).reset_index()
+                                            value=("value", "sum"),
+                                            trade_date=("trans_date", "min")).reset_index()
     o = owners[owners["accession_number"].isin(acc["accession_number"])].copy()
     rel = o["rptowner_relationship"].fillna("").astype(str)
     o["insider"] = rel.str.contains("Director") | rel.str.contains("Officer")
