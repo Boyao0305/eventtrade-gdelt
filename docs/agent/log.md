@@ -165,6 +165,19 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
 - **Implied next line:** forecast the earnings-reaction sign from alternative data before the
   announcement. It needs a data choice from the user (free proxies vs paid).
 
+**2026-10-16 — ADR 0017 done (experiment 0019): event response curves.**
+- Requested by the user: is the null a time-scale or direction problem?
+- **Country GDELT news:** no excess movement at any horizon. The null is real.
+- **Company attention spikes:** directionless volatility (variance ×1.3–1.5 for 1–3 days),
+  so options would be needed.
+- **No reversal pattern** in any event type.
+- **Directional:** earnings (small premium, permanent jump) and insider purchases (+0.7–1.6% in
+  2–10 days).
+- **Data error:** CHRD 2020-11-19 (bankruptcy re-listing) corrupts the INS-all period B signed
+  curve, so signed CARs should be winsorized in future.
+- Trials: 8,258 (34 V, counted in N).
+- During this run the D: drive filled up (the user freed space); nothing was lost.
+
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is
   documented in ADR 0011; no fix is planned (ticker reuse risk).
