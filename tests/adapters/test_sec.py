@@ -368,3 +368,25 @@ def test_ingest_sec_shares_resumes(tmp_path):
     assert ps.ingest_sec_shares(cfg, st, [store], fn, lambda: NOW, lambda s: None) == ps.OK
     assert ps.ingest_sec_shares(cfg, st, [store], fn, lambda: NOW, lambda s: None) == ps.OK
     assert calls == ["0000000001", "0000000002"]
+
+
+def test_fundamentals_concepts_units_and_holdout(tmp_path):
+    eps = {"units": {"USD/shares": [
+        {"start": "2016-01-01", "end": "2016-03-31", "val": 1.5, "fy": 2016, "fp": "Q1",
+         "form": "10-Q", "filed": "2016-04-28", "accn": "a1"},
+        {"start": "2025-01-01", "end": "2025-03-31", "val": 2.0, "fy": 2025, "fp": "Q1",
+         "form": "10-Q", "filed": "2025-04-28", "accn": "a2"}]}}
+    rev = {"units": {"USD": [
+        {"start": "2016-01-01", "end": "2016-03-31", "val": 1e9, "fy": 2016, "fp": "Q1",
+         "form": "10-Q", "filed": "2016-04-28", "accn": "a1"}]}}
+    c, s_ = _client([_Resp(200, eps), _Resp(404), _Resp(200, rev), _Resp(404), _Resp(404),
+                     _Resp(404), _Resp(404)])
+    df = sec.fundamentals(c, "7")
+    assert len(s_.calls) == 7
+    assert df["tag"].tolist() == ["EarningsPerShareDiluted", "Revenues"]
+    assert df["val"].tolist() == [1.5, 1e9]
+    st = SecStore(tmp_path / "sec.sqlite")
+    st.init()
+    assert st.write_facts("0000000007", df, NOW) == 2
+    assert st.write_facts("0000000007", df, NOW) == 2
+    assert len(st.read("xbrl_facts")) == 2 and st.pulled("facts2") == {"0000000007"}

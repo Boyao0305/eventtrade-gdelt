@@ -162,3 +162,26 @@ def ingest_sec_profiles(sstore: Any, ciks: list[str], profile_fn: Callable[[str]
         meta, df = profile_fn(cik)
         sstore.write_profile(meta, df, now())
     return OK
+
+
+def ingest_sec_facts(cfg: Config, sstore: Any, store: Any, facts_fn: Callable[[str], Any],
+                     now: Clock, echo: Echo = print) -> int:
+    """ADR 0018 input, resumable: XBRL EPS and revenue facts (filed before the hold-out) of every
+    Track B company mapped to a CIK. Reads no prices."""
+    sstore.init()
+    assets = store.read_assets("B")
+    tick = sstore.read("cik_tickers")
+    if not assets or tick.empty:
+        echo("missing: Track B assets or the CIK -> ticker map (run load-universe, ingest-sec)")
+        return MISSING
+    ciks = sorted(set(universe_ciks(assets, tick).values()))
+    done = sstore.pulled("facts2")
+    todo = [c for c in ciks if c not in done]
+    echo(f"facts: {len(ciks)} CIKs, {len(todo)} to pull")
+    empty = 0
+    for i, cik in enumerate(todo, 1):
+        empty += sstore.write_facts(cik, facts_fn(cik), now()) == 0
+        if i % 100 == 0:
+            echo(f"  {i}/{len(todo)} ({empty} without facts)")
+    echo(f"done: xbrl_facts {len(sstore.read('xbrl_facts')):,} rows; {empty} CIK(s) without facts")
+    return OK

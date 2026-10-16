@@ -192,6 +192,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start), _fetch_yf,
             # every split up to today: Yahoo's split-adjusted closes are on today's share basis
             lambda ts: prices.fetch_splits(ts, datetime.now(UTC).date()), prices.sanity_check)
+    if cmd == "ingest-sec-facts":
+        from eventtrade.adapters import sec
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_sec as psec
+
+        client = sec.SecClient(cfg.sec_user_agent)
+        return psec.ingest_sec_facts(cfg, SecStore(cfg.sec_db_path), store,
+                                     lambda cik: sec.fundamentals(client, cik), now)
     if cmd == "ingest-sec-shares":
         import pandas as pd
 
@@ -352,6 +360,7 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ingest-dod-prices", help="ADR 0015 amendment 2: daily prices + splits of"
                                                  " every mapped issuer (data/dodcap.sqlite)")
     s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
+    sub.add_parser("ingest-sec-facts", help="ADR 0018: XBRL EPS/revenue facts of Track B")
     s = sub.add_parser("ingest-sec-shares", help="ADR 0015: XBRL share counts of mapped issuers")
     s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
     s = sub.add_parser("map-dod", help="ADR 0015 amendment 3: map DoD sole awardees to issuer"

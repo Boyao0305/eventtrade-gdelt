@@ -59,6 +59,7 @@ _TABLES = {
     "company_meta": ["cik", "name", "sic", "former_names"],
     "company_filings2": ["cik", "form", "filing_date", "items", "accession"],
     "shares_out": ["cik", "tag", "end", "val", "filed", "form", "accn"],
+    "xbrl_facts": ["cik", "tag", "start", "end", "val", "fy", "fp", "form", "filed", "accn"],
     "ex21_hits": ["phrase", "cik", "file_date", "adsh", "doc"],
     "ex21_entries": ["adsh", "doc", "cik", "file_date", "entry_norm"],
     "sec_names": ["cik", "name", "valid_from", "valid_to", "last_filing"],
@@ -74,6 +75,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_subject ON subject_13d(adsh);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_meta ON company_meta(cik);
 CREATE INDEX IF NOT EXISTS ix_cf2_cik ON company_filings2(cik, filing_date);
 CREATE INDEX IF NOT EXISTS ix_shares_cik ON shares_out(cik, filed);
+CREATE INDEX IF NOT EXISTS ix_facts_cik ON xbrl_facts(cik, tag, filed);
 CREATE INDEX IF NOT EXISTS ix_ex21_phrase ON ex21_hits(phrase);
 CREATE INDEX IF NOT EXISTS ix_names_cik ON sec_names(cik);
 CREATE INDEX IF NOT EXISTS ix_ex21e_norm ON ex21_entries(entry_norm);
@@ -229,6 +231,19 @@ class SecStore:
             return pd.read_sql_query(
                 f"SELECT {', '.join('e.' + x for x in cols)} FROM ex21_entries e"
                 " JOIN want w ON w.n = e.entry_norm", c)
+
+    def write_facts(self, cik: str, df: pd.DataFrame, now: datetime) -> int:
+        """Replace one company's XBRL facts and record its CIK (kind 'facts2': EPS, revenue,
+        net income, diluted shares), atomically."""
+        cols = _TABLES["xbrl_facts"]
+        with self._conn() as c:
+            c.execute("DELETE FROM xbrl_facts WHERE cik = ?", (cik,))
+            c.executemany(f"INSERT INTO xbrl_facts VALUES ({','.join('?' * len(cols))})",
+                          df[cols].astype(object).where(df[cols].notna(), None)
+                          .itertuples(index=False, name=None))
+            c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
+                      ("facts2", cik, len(df), _iso(now)))
+        return len(df)
 
     def read(self, table: str) -> pd.DataFrame:
         cols = _TABLES[table]

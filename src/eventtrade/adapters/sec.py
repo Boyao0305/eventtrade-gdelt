@@ -255,6 +255,33 @@ SHARES_TAGS = (("dei", "EntityCommonStockSharesOutstanding"),
                ("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic"))
 SHARES_COLS = ["cik", "tag", "end", "val", "filed", "form", "accn"]
 
+FUND_TAGS = (("EarningsPerShareDiluted", "USD/shares"), ("EarningsPerShareBasic", "USD/shares"),
+             ("Revenues", "USD"), ("RevenueFromContractWithCustomerExcludingAssessedTax", "USD"),
+             ("SalesRevenueNet", "USD"), ("NetIncomeLoss", "USD"),
+             ("WeightedAverageNumberOfDilutedSharesOutstanding", "shares"))
+FACT_COLS = ["cik", "tag", "start", "end", "val", "fy", "fp", "form", "filed", "accn"]
+
+
+def fundamentals(client: SecClient, cik: str) -> pd.DataFrame:
+    """ADR 0018: every reported fact (filed before the hold-out) of the EPS and revenue concepts
+    in FUND_TAGS, with its period (start, end), fiscal year/period, form and filing date.
+    Concepts a company does not use (HTTP 404) are skipped. Columns FACT_COLS."""
+    cik = str(cik).zfill(10)
+    rows = []
+    for tag, unit in FUND_TAGS:
+        try:
+            d = client.get(CONCEPT_URL.format(cik=cik, tax="us-gaap", tag=tag)).json()
+        except SecError as e:
+            if "HTTP 404" in str(e):
+                continue
+            raise
+        for f in (d.get("units") or {}).get(unit, []):
+            if f.get("val") is None or (f.get("filed") or "9999") > SUBMISSIONS_TO:
+                continue
+            rows.append((cik, tag, f.get("start"), f.get("end"), float(f["val"]), f.get("fy"),
+                         f.get("fp"), f.get("form"), f.get("filed"), f.get("accn")))
+    return pd.DataFrame(rows, columns=FACT_COLS).drop_duplicates().reset_index(drop=True)
+
 
 def shares_outstanding(client: SecClient, cik: str) -> pd.DataFrame:
     """ADR 0015: one company's share counts from XBRL company concepts, filed before the hold-out.
