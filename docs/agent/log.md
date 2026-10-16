@@ -178,6 +178,16 @@ counts) comes from `eventtrade status` and `intraday-status`, not from this file
 - Trials: 8,258 (34 V, counted in N).
 - During this run the D: drive filled up (the user freed space); nothing was lost.
 
+**2026-10-16 (later) — ADR 0018 done (experiment 0020): not confirmed.**
+- Earnings-direction forecast from free data (35 features, walk-forward from 2016, 24,795
+  out-of-sample predictions 2018–2025Q1).
+- **W-L:** 51.9% hit, 53.7% weighted vs the 53.1% break-even, +0.05%/trade, p 0.18. It loses
+  to always-long (+0.11%, the announcement premium), and its shorts lose 0.44%.
+- **Rules:** past-reaction persistence and momentum are about 50%.
+- **The free-data path to earnings direction is closed.** What remains: paid consensus data,
+  options data, or stop (see `docs/research-backlog.md`).
+- Trials: 8,264.
+
 **Open notes.**
 - Holding-company CIK changes (DIS, CI, AVGO, LIN, …) lose pre-reorganization SEC filings. It is
   documented in ADR 0011; no fix is planned (ticker reuse risk).

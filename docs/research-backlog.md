@@ -4,7 +4,7 @@ One page listing what has been tested, what is open and what needs a decision. D
 `docs/experiments/` (results), `docs/adr/` (pre-registrations) and `docs/agent/log.md` (session
 handoff). Update this file when an experiment closes or a direction opens.
 
-Last update: 2026-10-16. Trials: 8,258 (look-ahead diagnostics are excluded from DSR's N).
+Last update: 2026-10-16. Trials: 8,264 (look-ahead diagnostics are excluded from DSR's N).
 Spend: ≈ $5.25 of the $20 cap (BigQuery only). The hold-out (≥ 2025-04-01) is untouched.
 
 ## 1. Signals tested (all pre-registered, run once)
@@ -26,12 +26,13 @@ Spend: ≈ $5.25 of the $20 cap (BigQuery only). The hold-out (≥ 2025-04-01) i
 | 13 | DoD contract awards ≥ 0.1% / ≥ 1% of market cap | 0015 → 0017 | null | 0/6; material +1.5% vs +0.7% over 20 days, p 0.12 |
 | 14 | Value of foresight: earnings, macro, DoD, insiders | 0016 → 0018 | diagnostic | knowing *when* is worthless; knowing earnings *direction* is valuable (break-even accuracy ≈ 53–55%) |
 | 15 | Event response curves (magnitude, direction, reversal, time scale) | 0017 → 0019 | diagnostic | country news moves nothing at any horizon; news spikes are directionless volatility; no reversals; insiders and earnings directional |
+| 16 | Earnings-direction forecast from free data (W-L logistic + baselines) | 0018 → 0020 | not confirmed | 51.9% hit (53.7% weighted vs 53.1% break-even), +0.05%/trade, p 0.18; loses to always-long; shorts lose |
 
 ## 2. Open research directions
 
 | Direction | Evidence for it | What it needs | Cost | Status |
 |---|---|---|---|---|
-| **A. Forecast the direction of the earnings reaction before the announcement** | Exp 0018: reactions average 4.4–4.8% (2–3× an ordinary move); a forecaster breaks even at ≈ 53–55% accuracy against 30 bp costs | Features from data we already have or can pull for free: past results from SEC XBRL, the stock's past earnings reactions, pre-announcement price/volume, insider buying | free | **recommended next**, waiting for the user's go |
+| ~~A. Forecast the direction of the earnings reaction from free data~~ (done: exp 0020, not confirmed) | Exp 0018: reactions average 4.4–4.8% (2–3× an ordinary move); a forecaster breaks even at ≈ 53–55% accuracy against 30 bp costs | Features from data we already have or can pull for free: past results from SEC XBRL, the stock's past earnings reactions, pre-announcement price/volume, insider buying | free | closed |
 | B. Earnings direction with alternative data | same as A | Google Trends, Wikipedia page views, job postings (free but patchy), or analyst consensus / card-spend panels (paid) | free to paid | after A |
 | C. Volatility around company news spikes | Exp 0019: variance 1.3–1.5× normal for 1–3 days, direction random | option prices (implied volatility) to check whether options already price this in, and to trade straddles | paid, over the $20 cap | needs the user's approval |
 | D. Volatility around FOMC afternoons and CPI/NFP mornings | Exp 0019: FOMC afternoons 2–3× normal variance, CPI/NFP mornings 1.4–1.75× (2020–25 only; FOMC 2016–19 has too few events) | option data, as for C. Scheduled events are usually priced into implied volatility, so the edge is doubtful | paid | low priority |
@@ -56,7 +57,7 @@ Spend: ≈ $5.25 of the $20 cap (BigQuery only). The hold-out (≥ 2025-04-01) i
 
 ## 4. Decisions waiting for the user
 
-1. Go ahead with direction A (earnings direction from free in-house data)?
+1. Direction A ran (exp 0020): not confirmed. Next needs paid data (B, C, D) or stopping.
 2. Spend beyond the $20 cap on option data (C, D) or consensus estimates (B)? Not approved so
    far.
 3. Merge `dev` into `main`? Not done; `main` still holds only the initial commit.
