@@ -183,3 +183,19 @@ def ingest_dod_prices(cfg: Config, map_rows: Any, prices_store: Any, dstore: Any
         dstore.write_splits(batch, fetch_splits(batch))
     echo(f"done: {len(dstore.splits())} split rows")
     return rc
+
+
+def ingest_track_splits(store: Any, dstore: Any, fetch_splits: Callable[[list[str]], Any],
+                        track: str = "B", echo: Echo = print) -> int:
+    """ADR 0018 input: Yahoo split histories (to today) of a track's assets into the shared split
+    table (dod.sqlite `dod_splits`), resumable. Writes no prices, reads no returns."""
+    dstore.init()
+    tickers = sorted(a.ticker for a in store.read_assets(track))
+    pulled = dstore.split_pulled()
+    todo = [t for t in tickers if t not in pulled]
+    echo(f"splits: {len(tickers)} track {track} tickers, {len(todo)} to fetch")
+    for i in range(0, len(todo), 50):
+        batch = todo[i:i + 50]
+        dstore.write_splits(batch, fetch_splits(batch))
+    echo(f"done: {len(dstore.splits())} split rows")
+    return OK

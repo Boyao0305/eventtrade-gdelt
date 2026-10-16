@@ -174,3 +174,26 @@ All items are adopted. Where they conflict with the Decision above, they win.
     - Break-even q* ≈ 0.533 at E|R| ≈ 4.6% (0.55 with median |R|).
     - The prior includes Bernard–Thomas (SUE autocorrelation) and the earnings-announcement
       premium (Frazzini–Lamont, Savor–Wilson), hence W-R0.
+
+## Implementation notes (2026-10-16, before the run)
+
+**Data.**
+- XBRL facts: 748,832 rows for 900 CIKs, of which 27 have no facts.
+- Yahoo split histories of Track B (2,530 split rows), used for raw closes in EPS / price.
+
+**Q4 EPS coverage.** Net income ÷ quarterly diluted shares is often unavailable because the
+Q4 share fact is missing. In April, when the last quarter is usually Q4, `eps_q` exists for
+about 61% of events, against 81–84% in other months. This is kept as registered (amendment 4):
+values are median-imputed and get missing flags.
+
+**Blind dry run** (trials stubbed; only counts printed).
+- 30,425 events, of which 30,198 pass the deal filter.
+- 35 features.
+- 24,797 out-of-sample predictions, 2018-01 → 2025-03.
+
+**Price-error rule added before the run.**
+- The reverting-spike screen (`clean_opens`) caught 0 events.
+- One-way errors such as CHRD 2020-11-19 (+25,700% in exp 0019) would not be caught and could
+  dominate the raw P&L.
+- So events with |R| > 100% over the 4-day window are dropped as price errors and counted. This
+  data-quality rule was fixed blind, before any outcome was computed.
