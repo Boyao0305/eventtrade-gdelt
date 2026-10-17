@@ -192,6 +192,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start), _fetch_yf,
             # every split up to today: Yahoo's split-adjusted closes are on today's share basis
             lambda ts: prices.fetch_splits(ts, datetime.now(UTC).date()), prices.sanity_check)
+    if cmd == "informed-study":
+        from eventtrade.adapters.dod_store import DodStore
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.adapters.shortvol_store import ShortVolStore
+        from eventtrade.cli import pipelines_dod as pdod
+        from eventtrade.cli import pipelines_informed as pinf
+
+        return pinf.informed_study(
+            cfg, store, SecStore(cfg.sec_db_path),
+            DodStore(cfg.dod_db_path, pdod.DOD_START, cfg.holdout_start), _istore(cfg),
+            ShortVolStore(cfg.home / "data" / "shortvol.sqlite", cfg.holdout_start), now)
+    if cmd == "ingest-8k-times":
+        from eventtrade.adapters import sec
+        from eventtrade.adapters.sec_store import SecStore
+        from eventtrade.cli import pipelines_sec as psec
+
+        client = sec.SecClient(cfg.sec_user_agent)
+        return psec.ingest_8k_times(cfg, SecStore(cfg.sec_db_path), store,
+                                    lambda cik: sec.company_8k_times(client, cik), now)
+    if cmd == "ingest-finra":
+        from eventtrade.adapters import finra
+        from eventtrade.adapters.shortvol_store import ShortVolStore
+        from eventtrade.cli import pipelines_dod as pdod
+
+        fc = finra.FinraClient()
+        return pdod.ingest_finra(cfg, store, ShortVolStore(cfg.home / "data" / "shortvol.sqlite",
+                                                           cfg.holdout_start),
+                                 lambda d, syms: finra.day_short_volume(fc, d, syms),
+                                 date(2015, 10, 1))
     if cmd == "earn-forecast":
         from eventtrade.adapters.dod_store import DodStore
         from eventtrade.adapters.sec_store import SecStore
@@ -376,6 +405,10 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ingest-dod-prices", help="ADR 0015 amendment 2: daily prices + splits of"
                                                  " every mapped issuer (data/dodcap.sqlite)")
     s.add_argument("--map", default="docs/dod/dod_issuer_map.csv")
+    sub.add_parser("informed-study", help="ADR 0019: pre-earnings informed trading, once"
+                                          " only (X)")
+    sub.add_parser("ingest-8k-times", help="ADR 0019: 8-K report dates / acceptance times")
+    sub.add_parser("ingest-finra", help="ADR 0019: FINRA daily short-sale volume (Track B)")
     sub.add_parser("earn-forecast", help="ADR 0018: earnings-direction forecast, once only (W)")
     sub.add_parser("ingest-splits", help="ADR 0018: Yahoo split histories of Track B")
     sub.add_parser("ingest-sec-facts", help="ADR 0018: XBRL EPS/revenue facts of Track B")

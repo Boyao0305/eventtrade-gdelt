@@ -13,6 +13,8 @@ from collections.abc import Callable
 from datetime import date
 from typing import Any, Protocol
 
+import pandas as pd
+
 from eventtrade.cli.pipelines import MISSING, OK, PARTIAL, Clock, Echo
 from eventtrade.config import Config
 from eventtrade.core.dod_parse import parse_dod_article, parse_dod_header
@@ -198,4 +200,23 @@ def ingest_track_splits(store: Any, dstore: Any, fetch_splits: Callable[[list[st
         batch = todo[i:i + 50]
         dstore.write_splits(batch, fetch_splits(batch))
     echo(f"done: {len(dstore.splits())} split rows")
+    return OK
+
+
+def ingest_finra(cfg: Config, store: Any, sv_store: Any, day_fn: Callable[[Any, set[str]], Any],
+                 start: date, echo: Echo = print) -> int:
+    """ADR 0019 input, resumable: FINRA daily short-sale volume (NMS facilities summed) of the
+    Track B symbols, for every SPY trading day from `start` to the day before the hold-out."""
+    sv_store.init()
+    syms = {a.ticker.replace("-", ".") for a in store.read_assets("B")}
+    px = store.read_prices(["SPY"], start, cfg.holdout_start)
+    days = sorted({pd.Timestamp(x).date() for x in px["date"]})
+    done = sv_store.done()
+    todo = [d for d in days if d.isoformat() not in done and d < cfg.holdout_start]
+    echo(f"finra: {len(days)} trading days, {len(todo)} to fetch, {len(syms)} symbols")
+    for i, d in enumerate(todo, 1):
+        sv_store.write_day(d, day_fn(d, syms))
+        if i % 100 == 0:
+            echo(f"  {i}/{len(todo)}")
+    echo("done")
     return OK

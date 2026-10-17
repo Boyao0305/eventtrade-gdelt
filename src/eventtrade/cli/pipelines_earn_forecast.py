@@ -92,7 +92,10 @@ def earn_forecast(cfg: Config, store: Any, sstore: Any, dstore: Any, now: Clock,
 
 # --- events and features ------------------------------------------------------------------------
 
-def build_events(cfg: Config, store: Any, sstore: Any, dstore: Any, echo: Echo) -> pd.DataFrame | None:
+def build_events(cfg: Config, store: Any, sstore: Any, dstore: Any, echo: Echo,
+                 day_map: dict | None = None) -> pd.DataFrame | None:
+    """ADR 0018 events and features; `day_map` (ADR 0019) maps (ticker, 8-K day d) to the
+    announcement day a, which then replaces d for the decision, window and label."""
     assets = {a.ticker: a for a in store.read_assets("B")}
     cmap = cik_to_ticker(list(assets.values()), sstore.read("cik_tickers"))
     tk_cik = {}
@@ -147,7 +150,8 @@ def build_events(cfg: Config, store: Any, sstore: Any, dstore: Any, echo: Echo) 
         if t not in tix:
             continue
         j = tix[t]
-        p = cal.get_indexer([d])[0]
+        a = day_map.get((t, d), d) if day_map is not None else d   # ADR 0019: announcement day
+        p = cal.get_indexer([a])[0]
         if p < 260 or p + 1 >= len(cal):
             continue
         rv = R[p, j]
@@ -160,7 +164,8 @@ def build_events(cfg: Config, store: Any, sstore: Any, dstore: Any, echo: Echo) 
         yr = dec.year
         if cov_cnt.get((t, yr - 1), 0) < 3:          # amendment 8: coverage on the prior year
             continue
-        f: dict[str, Any] = {"ticker": t, "d": d, "decision": dec, "label": cal[p + 1],
+        f: dict[str, Any] = {"ticker": t, "d": d, "a": cal[p], "pos": p, "decision": dec,
+                             "label": cal[p + 1],
                              "year": yr, "R": rv, "deal_ok": (t, d) in deal_keys}
         g = sz_by.get(t)
         prev = g[cal.get_indexer(pd.to_datetime(g["d"])) + 1 <= p - 3].tail(4) if g is not None \

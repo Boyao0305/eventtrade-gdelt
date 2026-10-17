@@ -160,6 +160,36 @@ def company_submissions(client: SecClient, cik: str) -> pd.DataFrame:
         .reset_index(drop=True)
 
 
+EIGHTK_COLS = ["cik", "form", "filing_date", "report_date", "acceptance", "items", "accession"]
+
+
+def company_8k_times(client: SecClient, cik: str) -> pd.DataFrame:
+    """ADR 0019 amendment B1: every 8-K (not 8-K/A) of one company filed 2015-01-01 .. 2025-03-31
+    with its reportDate (the date of the event reported, e.g. the earnings release) and its
+    acceptanceDateTime (EDGAR timestamp). Columns EIGHTK_COLS."""
+    cik = str(cik).zfill(10)
+    d = client.get(SUBMISSIONS_URL.format(name=f"CIK{cik}.json")).json()
+    filings = d.get("filings") or {}
+    pages = [filings.get("recent") or {}]
+    for f in filings.get("files") or []:
+        if (f.get("filingTo") or "9999") < SUBMISSIONS_FROM or \
+                (f.get("filingFrom") or "") > SUBMISSIONS_TO:
+            continue
+        pages.append(client.get(SUBMISSIONS_URL.format(name=f["name"])).json())
+    rows = []
+    for p in pages:
+        n = len(p.get("form") or [])
+        cols = {k: p.get(k) or [""] * n for k in ("form", "filingDate", "reportDate",
+                                                   "acceptanceDateTime", "items",
+                                                   "accessionNumber")}
+        for form, fd, rd, acc_t, it, acc in zip(*cols.values(), strict=False):
+            if form == "8-K" and SUBMISSIONS_FROM <= fd <= SUBMISSIONS_TO:
+                rows.append((cik, form, fd, rd or "", acc_t or "", it or "", acc))
+    df = pd.DataFrame(rows, columns=EIGHTK_COLS)
+    return df.drop_duplicates("accession").sort_values(["filing_date", "accession"]) \
+        .reset_index(drop=True)
+
+
 PROFILE_FORMS = frozenset({"10-Q", "10-K", "10-Q/A", "10-K/A", "8-K", "DEFM14A", "S-4",
                            "8-A12B", "8-A12G", "25", "25-NSE", "15-12B", "15-12G", "15-15D"})
 PROFILE_ANY_DATE = frozenset({"8-A12B", "8-A12G"})  # registrations: kept whatever their date

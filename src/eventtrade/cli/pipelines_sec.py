@@ -185,3 +185,22 @@ def ingest_sec_facts(cfg: Config, sstore: Any, store: Any, facts_fn: Callable[[s
             echo(f"  {i}/{len(todo)} ({empty} without facts)")
     echo(f"done: xbrl_facts {len(sstore.read('xbrl_facts')):,} rows; {empty} CIK(s) without facts")
     return OK
+
+
+def ingest_8k_times(cfg: Config, sstore: Any, store: Any, fn: Callable[[str], Any], now: Clock,
+                    echo: Echo = print) -> int:
+    """ADR 0019 amendment B1, resumable: 8-K report dates and acceptance times of every Track B
+    company mapped to a CIK. Reads no prices."""
+    sstore.init()
+    assets = store.read_assets("B")
+    tick = sstore.read("cik_tickers")
+    ciks = sorted(set(universe_ciks(assets, tick).values()))
+    done = sstore.pulled("8ktimes")
+    todo = [c for c in ciks if c not in done]
+    echo(f"8-K times: {len(ciks)} CIKs, {len(todo)} to pull")
+    for i, cik in enumerate(todo, 1):
+        sstore.write_8k_times(cik, fn(cik), now())
+        if i % 100 == 0:
+            echo(f"  {i}/{len(todo)}")
+    echo(f"done: eightk_times {len(sstore.read('eightk_times')):,} rows")
+    return OK

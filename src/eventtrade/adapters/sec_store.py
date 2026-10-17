@@ -60,6 +60,8 @@ _TABLES = {
     "company_filings2": ["cik", "form", "filing_date", "items", "accession"],
     "shares_out": ["cik", "tag", "end", "val", "filed", "form", "accn"],
     "xbrl_facts": ["cik", "tag", "start", "end", "val", "fy", "fp", "form", "filed", "accn"],
+    "eightk_times": ["cik", "form", "filing_date", "report_date", "acceptance", "items",
+                     "accession"],
     "ex21_hits": ["phrase", "cik", "file_date", "adsh", "doc"],
     "ex21_entries": ["adsh", "doc", "cik", "file_date", "entry_norm"],
     "sec_names": ["cik", "name", "valid_from", "valid_to", "last_filing"],
@@ -243,6 +245,17 @@ class SecStore:
                           .itertuples(index=False, name=None))
             c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
                       ("facts2", cik, len(df), _iso(now)))
+        return len(df)
+
+    def write_8k_times(self, cik: str, df: pd.DataFrame, now: datetime) -> int:
+        """Replace one company's 8-K report dates / acceptance times (kind '8ktimes')."""
+        cols = _TABLES["eightk_times"]
+        with self._conn() as c:
+            c.execute("DELETE FROM eightk_times WHERE cik = ?", (cik,))
+            c.executemany(f"INSERT INTO eightk_times VALUES ({','.join('?' * len(cols))})",
+                          df[cols].itertuples(index=False, name=None))
+            c.execute("INSERT OR REPLACE INTO sec_pulls VALUES (?,?,?,?)",
+                      ("8ktimes", cik, len(df), _iso(now)))
         return len(df)
 
     def read(self, table: str) -> pd.DataFrame:
