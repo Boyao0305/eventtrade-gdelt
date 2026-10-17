@@ -57,10 +57,9 @@ def informed_study(cfg: Config, store: Any, sstore: Any, dstore: Any, istore: An
     earn_all = er.earnings_days(cf, cmap, cal, dedup=False, deal_filter=False)
     earn_pos = {t: np.sort(cal.get_indexer(pd.to_datetime(g["d"]))) for t, g in
                 earn_all.groupby("ticker")}
-    empty = np.array([], dtype=int)
-    other = np.array([bool(((earn_pos.get(t, empty) >= p - OTHER_EARN)
-                            & (earn_pos.get(t, empty) <= p - 1)).any())
-                      for t, p in zip(ev["ticker"], ev["pos"], strict=True)], dtype=bool)
+    own = cal.get_indexer(pd.to_datetime(ev["d"]))   # the event's own 8-K filing day
+    other = np.array([_other_earnings(earn_pos.get(t), p, o)
+                      for t, p, o in zip(ev["ticker"], ev["pos"], own, strict=True)], dtype=bool)
     ev = ev[~other].reset_index(drop=True)
     echo(f"events: {len(ev):,} after dropping {int(other.sum())} with another 2.02 8-K in"
          f" [a-{OTHER_EARN}, a-1]")
@@ -123,6 +122,15 @@ def informed_study(cfg: Config, store: Any, sstore: Any, dstore: Any, istore: An
         _log_trial(store, logged, "B", "signal", HYPOTHESIS, params, *pef.OOS, now, note)
     echo(f"{len(logged) - n0} trial(s) logged")
     return OK
+
+
+def _other_earnings(earn_pos: np.ndarray | None, a: int, own: int) -> bool:
+    """Amendment 1: another 2.02 8-K filed in [a-15, a-1] before the event's own 8-K. An
+    after-16:00 filing puts the event's own 8-K at a-1; it is not 'another' one."""
+    if earn_pos is None or not len(earn_pos):
+        return False
+    e = earn_pos
+    return bool(((e >= a - OTHER_EARN) & (e <= a - 1) & (e < own)).any())
 
 
 def _day_map(eightk: pd.DataFrame, cmap: dict[str, str], cal: pd.DatetimeIndex

@@ -145,3 +145,26 @@ All items are adopted. Where they conflict with the Decision above, they win.
     - X-R cut-offs are pooled over the training events; ties go to the inner side; events with
       no X2 are excluded and counted.
     - Peer earnings inside W are public information, not informed trading (stated).
+
+## Implementation notes (2026-10-17, before the run)
+
+- **Data:**
+  - FINRA short volume for 2,388 trading days (2015-10-01 → 2025-03-31), 1.93M stock-days.
+  - Continuity: the sum of the facility files equals CNMS exactly on 5 overlap days (median
+    ratio 1.000 for short and total volume; 775–880 of our symbols matched).
+  - 8-K report dates and acceptance times for 109,320 8-Ks.
+- **Announcement days:** 35,629 Item 2.02 8-Ks mapped; 3,709 moved before the 8-K filing day by
+  reportDate / acceptance.
+- **Bug found and fixed in a blind dry run.**
+  - The "another 2.02 8-K in [a−15, a−1]" rule first dropped 13,184 events. An after-16:00
+    filing puts the event's own 8-K at a−1, and it was counted as "another".
+  - Only 8-Ks filed before the event's own 8-K now count (`_other_earnings`, tested). 714
+    events are dropped.
+- **Second blind dry run:**
+  - 29,476 events.
+  - X2 missing 1,624, X3 missing 2,439.
+  - corr(X2, hedged W return) = 0.353.
+  - Out-of-sample: X-L 24,209 predictions; X-R 4,393 trades.
+- **X6 end point.** It runs to the last 15-minute bar close, not Yahoo's official close.
+  Alpaca bars are unadjusted and Yahoo closes are split-adjusted, so mixing them would be wrong
+  around splits. This is a deviation from amendment 8, stated here.

@@ -74,3 +74,14 @@ def test_market_log_ratio_and_announcement_day():
                                 "2019-01-10T21:30:00.000Z", cal) == pd.Timestamp("2019-01-11")
     assert inf.announcement_day(date(2019, 1, 10), None, "2019-01-10T14:00:00.000Z", cal) == \
         pd.Timestamp("2019-01-10")
+
+
+def test_other_earnings_excludes_the_events_own_filing():
+    import numpy as np
+
+    from eventtrade.cli.pipelines_informed import _other_earnings
+
+    ep = np.array([40, 99])           # 99 = the event's own 8-K, filed after 16:00 (a = 100)
+    assert not _other_earnings(ep, 100, 99)
+    assert _other_earnings(np.array([90, 99]), 100, 99)      # a 2.02 8-K 10 days before
+    assert not _other_earnings(None, 100, 99)
